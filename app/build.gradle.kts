@@ -16,6 +16,27 @@ android {
         versionName = "1.0"
     }
 
+    val stableKeystorePath = System.getenv("ANDROID_KEYSTORE_PATH")
+        ?: "android-signing.p12"
+
+    val stableKeystorePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD")
+        ?: error("ANDROID_KEYSTORE_PASSWORD is required")
+
+    signingConfigs {
+        create("stableDebug") {
+            storeFile = file(stableKeystorePath)
+            storePassword = stableKeystorePassword
+            keyAlias = "sebu-dollar-ai"
+            keyPassword = stableKeystorePassword
+        }
+    }
+
+    buildTypes {
+        getByName("debug") {
+            signingConfig = signingConfigs.getByName("stableDebug")
+        }
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
