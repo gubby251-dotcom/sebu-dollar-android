@@ -28,6 +28,12 @@ jobs:
       - name: Build APK
         run: gradle assembleDebug
 
+      - name: Get Android SHA-1 and SHA-256
+        run: |
+          echo "===== SEBU DOLLAR AI DEBUG CERTIFICATE ====="
+          gradle signingReport
+          echo "============================================"
+
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
