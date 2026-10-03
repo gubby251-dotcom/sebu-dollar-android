@@ -44,7 +44,7 @@ class MainActivity : AppCompatActivity() {
         webView.webChromeClient = WebChromeClient()
 
         if (savedInstanceState == null) {
-            webView.loadUrl("https://gubby251-dotcom.github.io/ai--ebu-dollar/")
+            webView.loadUrl("file:///android_asset/index.html")
         } else {
             webView.restoreState(savedInstanceState)
         }
