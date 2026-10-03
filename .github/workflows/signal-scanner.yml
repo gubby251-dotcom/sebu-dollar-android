@@ -1,6 +1,6 @@
 name: SEBU DOLLAR AI Signal Push
 
-on:
+'on':
   workflow_dispatch:
 
   schedule:
@@ -43,7 +43,7 @@ jobs:
 
             git add .github/scanner-state.json
 
-            git commit -m "chore: update signal scanner checkpoint [skip ci]"
+            git commit -m "chore: update scanner checkpoint [skip ci]"
 
             git push
           else
