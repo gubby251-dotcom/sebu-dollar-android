@@ -25,17 +25,40 @@ jobs:
         with:
           gradle-version: '8.9'
 
+      - name: Prepare permanent Android signing key
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          test -n "$ANDROID_KEYSTORE_BASE64" || {
+            echo "ANDROID_KEYSTORE_BASE64 belum diatur"
+            exit 1
+          }
+
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > android-signing.p12
+
+          test -s android-signing.p12
+
       - name: Build APK
+        env:
+          ANDROID_KEYSTORE_PATH: ${{ github.workspace }}/android-signing.p12
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
         run: gradle assembleDebug
 
       - name: Get Android SHA-1 and SHA-256
+        env:
+          ANDROID_KEYSTORE_PATH: ${{ github.workspace }}/android-signing.p12
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
         run: |
-          echo "===== SEBU DOLLAR AI DEBUG CERTIFICATE ====="
+          echo "===== SEBU DOLLAR AI PERMANENT CERTIFICATE ====="
           gradle signingReport
-          echo "============================================"
+          echo "==============================================="
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: SEBU-DOLLAR-AI-APK
           path: app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Remove signing key
+        if: always()
+        run: rm -f android-signing.p12
