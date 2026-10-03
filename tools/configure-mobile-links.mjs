@@ -10,7 +10,7 @@ const auth = getAuth();
 const result =
   await auth.projectConfigManager().updateProjectConfig({
     mobileLinksConfig: {
-      domain: "sebu-dollar-ai.firebaseapp.com",
+      domain: "HOSTING_DOMAIN",
     },
   });
 
