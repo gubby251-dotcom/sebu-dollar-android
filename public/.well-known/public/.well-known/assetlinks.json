@@ -1,0 +1,14 @@
+[
+  {
+    "relation": [
+      "delegate_permission/common.handle_all_urls"
+    ],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "com.gubby251.sebudollarai",
+      "sha256_cert_fingerprints": [
+        "49:FC:57:A8:BF:57:87:DA:66:09:AB:ED:96:3B:EB:9D:AA:7A:ED:0F:84:4A:CC:3F:0B:BF:5C:CE:36:F4:53:11"
+      ]
+    }
+  }
+]
