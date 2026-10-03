@@ -1,27 +1,47 @@
 <?xml version="1.0" encoding="utf-8"?>
+
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <!-- Internet -->
     <uses-permission android:name="android.permission.INTERNET" />
+
+    <!-- Notification Android 13+ -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
-    android:allowBackup="false"
-    android:label="SEBU DOLLAR AI"
-    android:icon="@drawable/logo"
-    android:usesCleartextTraffic="false"
-    android:theme="@style/AppTheme">
+        android:allowBackup="false"
+        android:label="SEBU DOLLAR AI"
+        android:icon="@drawable/logo"
+        android:usesCleartextTraffic="false"
+        android:theme="@style/AppTheme">
 
+        <!-- Main Activity -->
         <activity
             android:name=".MainActivity"
             android:exported="true">
 
+            <!-- App launcher -->
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
 
+            <!-- Firebase Email Link -->
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+
+                <data
+                    android:scheme="https"
+                    android:host="sebu-dollar-ai.firebaseapp.com"
+                    android:pathPrefix="/__/auth/links" />
+            </intent-filter>
+
         </activity>
 
+        <!-- Firebase Cloud Messaging -->
         <service
             android:name=".SignalMessagingService"
             android:exported="false">
@@ -33,4 +53,5 @@
         </service>
 
     </application>
+
 </manifest>
