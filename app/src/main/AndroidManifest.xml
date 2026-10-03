@@ -32,7 +32,8 @@
 
                 <data
                     android:scheme="https"
-                    android:host="sebu-dollar-ai.firebaseapp.com" />
+                    android:host="sebu-dollar-ai.firebaseapp.com"
+                    android:pathPrefix="/__/auth/links" />
             </intent-filter>
 
             <!-- Firebase Hosting web.app fallback -->
