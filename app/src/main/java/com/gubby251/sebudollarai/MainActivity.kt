@@ -21,6 +21,7 @@ import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.firestore.Source
 import com.google.firebase.messaging.FirebaseMessaging
 
 class MainActivity : AppCompatActivity() {
@@ -190,7 +191,8 @@ class MainActivity : AppCompatActivity() {
                         checkMemberAccess(uid)
                     } else {
                         button.isEnabled = true
-                        info.text = "Login gagal: UID tidak ditemukan."
+                        info.text =
+                            "Login gagal: UID tidak ditemukan."
                     }
 
                 } else {
@@ -217,22 +219,19 @@ class MainActivity : AppCompatActivity() {
 
     private fun checkMemberAccess(uid: String) {
 
-        firestore
-            .collection("members")
-            .document(uid)
-            .get()
-            .addOnSuccessListener { doc ->
+        val user = auth.currentUser
 
-                val active =
-                    doc.exists() &&
-                    doc.getString("status")
-                        ?.uppercase() == "ACTIVE"
+        if (user == null) {
+            showLoginScreen(
+                "Sesi login tidak ditemukan."
+            )
+            return
+        }
 
-                if (active) {
+        user.getIdToken(true)
+            .addOnCompleteListener { tokenTask ->
 
-                    enterAi()
-
-                } else {
+                if (!tokenTask.isSuccessful) {
 
                     FirebaseMessaging
                         .getInstance()
@@ -243,27 +242,67 @@ class MainActivity : AppCompatActivity() {
                     auth.signOut()
 
                     showLoginScreen(
-                        "Akun belum mendapat akses ACTIVE dari admin."
+                        "Sesi Firebase tidak dapat diperbarui."
                     )
+
+                    return@addOnCompleteListener
                 }
-            }
-            .addOnFailureListener { error ->
 
-                FirebaseMessaging
-                    .getInstance()
-                    .unsubscribeFromTopic(
-                        "sebu_signal_users"
-                    )
+                firestore
+                    .collection("members")
+                    .document(uid)
+                    .get(Source.SERVER)
+                    .addOnSuccessListener { doc ->
 
-                auth.signOut()
+                        val status =
+                            doc.get("status")
+                                ?.toString()
+                                ?.trim()
 
-                showLoginScreen(
-                    "Tidak dapat memeriksa akses member.\n" +
-                    (
-                        error.localizedMessage
-                            ?: "Periksa koneksi Firebase."
-                    )
-                )
+                        val active =
+                            doc.exists() &&
+                            status.equals(
+                                "ACTIVE",
+                                ignoreCase = true
+                            )
+
+                        if (active) {
+
+                            enterAi()
+
+                        } else {
+
+                            FirebaseMessaging
+                                .getInstance()
+                                .unsubscribeFromTopic(
+                                    "sebu_signal_users"
+                                )
+
+                            auth.signOut()
+
+                            showLoginScreen(
+                                "Akun belum mendapat akses ACTIVE dari admin."
+                            )
+                        }
+                    }
+                    .addOnFailureListener { error ->
+
+                        FirebaseMessaging
+                            .getInstance()
+                            .unsubscribeFromTopic(
+                                "sebu_signal_users"
+                            )
+
+                        auth.signOut()
+
+                        showLoginScreen(
+                            "Gagal memeriksa akses member.\n" +
+                            (
+                                error.localizedMessage
+                                    ?: "Periksa koneksi Firebase."
+                            )
+                        )
+                    }
             }
     }
 
