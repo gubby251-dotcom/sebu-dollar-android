@@ -227,28 +227,42 @@ class MainActivity : AppCompatActivity() {
         val currentUser = auth.currentUser
 
         if (currentUser == null) {
+
             showLoginScreen(
                 "Sesi login tidak ditemukan."
             )
+
             return
         }
 
-        infoRefreshTokenAndReadMember(
-            uid
-        )
-    }
+        /*
+         * Pastikan UID yang dipakai benar-benar UID
+         * dari akun Firebase yang sedang login.
+         */
+        val realUid = currentUser.uid
 
-    private fun infoRefreshTokenAndReadMember(uid: String) {
+        if (realUid != uid) {
 
-        val currentUser = auth.currentUser
+            FirebaseMessaging
+                .getInstance()
+                .unsubscribeFromTopic(
+                    "sebu_signal_users"
+                )
 
-        if (currentUser == null) {
+            auth.signOut()
+
             showLoginScreen(
-                "Sesi login tidak ditemukan."
+                "UID akun tidak cocok."
             )
+
             return
         }
 
+        /*
+         * Refresh token Firebase terlebih dahulu.
+         * Ini mencegah token lama menyebabkan Firestore
+         * membaca akses yang salah.
+         */
         currentUser
             .getIdToken(true)
             .addOnCompleteListener { tokenTask ->
@@ -264,13 +278,13 @@ class MainActivity : AppCompatActivity() {
                     auth.signOut()
 
                     showLoginScreen(
-                        "Sesi Firebase tidak dapat diperbarui."
+                        "Token Firebase gagal diperbarui."
                     )
 
                     return@addOnCompleteListener
                 }
 
-                readMemberFromServer(uid)
+                readMemberFromServer(realUid)
             }
     }
 
@@ -280,21 +294,46 @@ class MainActivity : AppCompatActivity() {
             .collection("members")
             .document(uid)
             .get(Source.SERVER)
-            .addOnSuccessListener { doc ->
+            .addOnSuccessListener { document ->
 
-                val status =
-                    doc.get("status")
-                        ?.toString()
-                        ?.trim()
+                /*
+                 * Dokumen benar-benar ada.
+                 */
+                if (!document.exists()) {
 
-                val active =
-                    doc.exists() &&
-                    status.equals(
-                        "ACTIVE",
-                        ignoreCase = true
+                    FirebaseMessaging
+                        .getInstance()
+                        .unsubscribeFromTopic(
+                            "sebu_signal_users"
+                        )
+
+                    auth.signOut()
+
+                    showLoginScreen(
+                        "Member belum terdaftar.\n\n" +
+                        "UID:\n$uid\n\n" +
+                        "Dokumen yang dicari:\n" +
+                        "members/$uid"
                     )
 
-                if (active) {
+                    return@addOnSuccessListener
+                }
+
+                /*
+                 * Ambil status tanpa bergantung pada tipe
+                 * object tertentu.
+                 */
+                val status =
+                    document
+                        .get("status")
+                        ?.toString()
+                        ?.trim()
+                        ?.uppercase()
+
+                /*
+                 * HANYA ACTIVE yang boleh masuk.
+                 */
+                if (status == "ACTIVE") {
 
                     enterAi()
 
@@ -309,12 +348,21 @@ class MainActivity : AppCompatActivity() {
                     auth.signOut()
 
                     showLoginScreen(
-                        "Akun belum mendapat akses ACTIVE dari admin."
+                        "Akun belum mendapat akses ACTIVE dari admin.\n\n" +
+                        "Status saat ini: " +
+                        (status ?: "NULL")
                     )
                 }
             }
             .addOnFailureListener { error ->
 
+                /*
+                 * Jangan menganggap error sebagai
+                 * member tidak ada.
+                 *
+                 * Tampilkan error sebenarnya agar
+                 * penyebab bisa diketahui dengan jelas.
+                 */
                 FirebaseMessaging
                     .getInstance()
                     .unsubscribeFromTopic(
@@ -323,12 +371,16 @@ class MainActivity : AppCompatActivity() {
 
                 auth.signOut()
 
+                val detail =
+                    error.localizedMessage
+                        ?: error.message
+                        ?: "Unknown Firestore error."
+
                 showLoginScreen(
-                    "Tidak dapat memeriksa akses member.\n" +
-                    (
-                        error.localizedMessage
-                            ?: "Periksa koneksi Firebase."
-                    )
+                    "Gagal membaca akses member.\n\n" +
+                    "UID:\n$uid\n\n" +
+                    "Path:\nmembers/$uid\n\n" +
+                    "Error:\n$detail"
                 )
             }
     }
