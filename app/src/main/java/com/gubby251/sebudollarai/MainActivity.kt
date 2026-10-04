@@ -16,9 +16,11 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
+
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.Source
@@ -194,7 +196,6 @@ class MainActivity : AppCompatActivity() {
                     } else {
 
                         button.isEnabled = true
-
                         info.text =
                             "Login gagal: UID tidak ditemukan."
                     }
@@ -223,18 +224,33 @@ class MainActivity : AppCompatActivity() {
 
     private fun checkMemberAccess(uid: String) {
 
-        val user = auth.currentUser
+        val currentUser = auth.currentUser
 
-        if (user == null) {
-
+        if (currentUser == null) {
             showLoginScreen(
                 "Sesi login tidak ditemukan."
             )
-
             return
         }
 
-        user.getIdToken(true)
+        infoRefreshTokenAndReadMember(
+            uid
+        )
+    }
+
+    private fun infoRefreshTokenAndReadMember(uid: String) {
+
+        val currentUser = auth.currentUser
+
+        if (currentUser == null) {
+            showLoginScreen(
+                "Sesi login tidak ditemukan."
+            )
+            return
+        }
+
+        currentUser
+            .getIdToken(true)
             .addOnCompleteListener { tokenTask ->
 
                 if (!tokenTask.isSuccessful) {
@@ -248,100 +264,72 @@ class MainActivity : AppCompatActivity() {
                     auth.signOut()
 
                     showLoginScreen(
-                        "DIAGNOSIS\n\n" +
-                        "UID: $uid\n\n" +
-                        "Gagal memperbarui token Firebase.\n\n" +
-                        (
-                            tokenTask.exception?.localizedMessage
-                                ?: "Token Firebase tidak dapat diperbarui."
-                        )
+                        "Sesi Firebase tidak dapat diperbarui."
                     )
 
                     return@addOnCompleteListener
                 }
 
-                firestore
-                    .collection("members")
-                    .document(uid)
-                    .get(Source.SERVER)
-                    .addOnSuccessListener { doc ->
+                readMemberFromServer(uid)
+            }
+    }
 
-                        val statusRaw =
-                            doc.get("status")
-                                ?.toString()
+    private fun readMemberFromServer(uid: String) {
 
-                        val status =
-                            statusRaw
-                                ?.trim()
+        firestore
+            .collection("members")
+            .document(uid)
+            .get(Source.SERVER)
+            .addOnSuccessListener { doc ->
 
-                        val active =
-                            doc.exists() &&
-                            status.equals(
-                                "ACTIVE",
-                                ignoreCase = true
-                            )
+                val status =
+                    doc.get("status")
+                        ?.toString()
+                        ?.trim()
 
-                        if (active) {
+                val active =
+                    doc.exists() &&
+                    status.equals(
+                        "ACTIVE",
+                        ignoreCase = true
+                    )
 
-                            enterAi()
+                if (active) {
 
-                        } else {
+                    enterAi()
 
-                            FirebaseMessaging
-                                .getInstance()
-                                .unsubscribeFromTopic(
-                                    "sebu_signal_users"
-                                )
+                } else {
 
-                            auth.signOut()
-
-                            val diagnosis =
-                                "DIAGNOSIS MEMBER\n\n" +
-                                "UID APK:\n" +
-                                uid +
-                                "\n\n" +
-                                "Path Firestore:\n" +
-                                "members/$uid" +
-                                "\n\n" +
-                                "Dokumen ada:\n" +
-                                doc.exists() +
-                                "\n\n" +
-                                "Status terbaca:\n" +
-                                (statusRaw ?: "NULL") +
-                                "\n\n" +
-                                "Status ACTIVE:\n" +
-                                active
-
-                            showLoginScreen(
-                                diagnosis
-                            )
-                        }
-                    }
-                    .addOnFailureListener { error ->
-
-                        FirebaseMessaging
-                            .getInstance()
-                            .unsubscribeFromTopic(
-                                "sebu_signal_users"
-                            )
-
-                        auth.signOut()
-
-                        showLoginScreen(
-                            "DIAGNOSIS FIRESTORE\n\n" +
-                            "UID APK:\n" +
-                            uid +
-                            "\n\n" +
-                            "Path:\n" +
-                            "members/$uid" +
-                            "\n\n" +
-                            "Firestore ERROR:\n" +
-                            (
-                                error.localizedMessage
-                                    ?: "Tidak diketahui"
-                            )
+                    FirebaseMessaging
+                        .getInstance()
+                        .unsubscribeFromTopic(
+                            "sebu_signal_users"
                         )
-                    }
+
+                    auth.signOut()
+
+                    showLoginScreen(
+                        "Akun belum mendapat akses ACTIVE dari admin."
+                    )
+                }
+            }
+            .addOnFailureListener { error ->
+
+                FirebaseMessaging
+                    .getInstance()
+                    .unsubscribeFromTopic(
+                        "sebu_signal_users"
+                    )
+
+                auth.signOut()
+
+                showLoginScreen(
+                    "Tidak dapat memeriksa akses member.\n" +
+                    (
+                        error.localizedMessage
+                            ?: "Periksa koneksi Firebase."
+                    )
+                )
             }
     }
 
