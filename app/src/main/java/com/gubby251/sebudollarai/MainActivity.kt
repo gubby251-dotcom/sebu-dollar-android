@@ -188,9 +188,13 @@ class MainActivity : AppCompatActivity() {
                     val uid = auth.currentUser?.uid
 
                     if (uid != null) {
+
                         checkMemberAccess(uid)
+
                     } else {
+
                         button.isEnabled = true
+
                         info.text =
                             "Login gagal: UID tidak ditemukan."
                     }
@@ -222,9 +226,11 @@ class MainActivity : AppCompatActivity() {
         val user = auth.currentUser
 
         if (user == null) {
+
             showLoginScreen(
                 "Sesi login tidak ditemukan."
             )
+
             return
         }
 
@@ -242,7 +248,13 @@ class MainActivity : AppCompatActivity() {
                     auth.signOut()
 
                     showLoginScreen(
-                        "Sesi Firebase tidak dapat diperbarui."
+                        "DIAGNOSIS\n\n" +
+                        "UID: $uid\n\n" +
+                        "Gagal memperbarui token Firebase.\n\n" +
+                        (
+                            tokenTask.exception?.localizedMessage
+                                ?: "Token Firebase tidak dapat diperbarui."
+                        )
                     )
 
                     return@addOnCompleteListener
@@ -254,9 +266,12 @@ class MainActivity : AppCompatActivity() {
                     .get(Source.SERVER)
                     .addOnSuccessListener { doc ->
 
-                        val status =
+                        val statusRaw =
                             doc.get("status")
                                 ?.toString()
+
+                        val status =
+                            statusRaw
                                 ?.trim()
 
                         val active =
@@ -280,8 +295,25 @@ class MainActivity : AppCompatActivity() {
 
                             auth.signOut()
 
+                            val diagnosis =
+                                "DIAGNOSIS MEMBER\n\n" +
+                                "UID APK:\n" +
+                                uid +
+                                "\n\n" +
+                                "Path Firestore:\n" +
+                                "members/$uid" +
+                                "\n\n" +
+                                "Dokumen ada:\n" +
+                                doc.exists() +
+                                "\n\n" +
+                                "Status terbaca:\n" +
+                                (statusRaw ?: "NULL") +
+                                "\n\n" +
+                                "Status ACTIVE:\n" +
+                                active
+
                             showLoginScreen(
-                                "Akun belum mendapat akses ACTIVE dari admin."
+                                diagnosis
                             )
                         }
                     }
@@ -296,10 +328,17 @@ class MainActivity : AppCompatActivity() {
                         auth.signOut()
 
                         showLoginScreen(
-                            "Gagal memeriksa akses member.\n" +
+                            "DIAGNOSIS FIRESTORE\n\n" +
+                            "UID APK:\n" +
+                            uid +
+                            "\n\n" +
+                            "Path:\n" +
+                            "members/$uid" +
+                            "\n\n" +
+                            "Firestore ERROR:\n" +
                             (
                                 error.localizedMessage
-                                    ?: "Periksa koneksi Firebase."
+                                    ?: "Tidak diketahui"
                             )
                         )
                     }
