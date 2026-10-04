@@ -23,6 +23,7 @@ import androidx.core.content.ContextCompat
 
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.firestore.Source
 import com.google.firebase.messaging.FirebaseMessaging
 
 
@@ -31,6 +32,16 @@ class MainActivity : AppCompatActivity() {
     private lateinit var webView: WebView
     private lateinit var auth: FirebaseAuth
     private lateinit var firestore: FirebaseFirestore
+
+    /*
+     * UID ADMIN UTAMA
+     *
+     * Admin tidak lagi bergantung pada dokumen members.
+     * Jadi walaupun collection members kosong,
+     * admin tetap bisa masuk ke AI.
+     */
+    private val ADMIN_UID =
+        "ilhY96UDI3W9n4Qir4v78nu8G9X2"
 
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -68,7 +79,8 @@ class MainActivity : AppCompatActivity() {
 
             orientation = LinearLayout.VERTICAL
 
-            gravity = Gravity.CENTER_HORIZONTAL
+            gravity =
+                Gravity.CENTER_HORIZONTAL
 
             setPadding(
                 40,
@@ -78,20 +90,28 @@ class MainActivity : AppCompatActivity() {
             )
 
             setBackgroundColor(
-                Color.rgb(18, 18, 18)
+                Color.rgb(
+                    18,
+                    18,
+                    18
+                )
             )
         }
 
 
         val title = TextView(this).apply {
 
-            text = "SEBU DOLLAR AI"
+            text =
+                "SEBU DOLLAR AI"
 
             textSize = 26f
 
-            setTextColor(Color.WHITE)
+            setTextColor(
+                Color.WHITE
+            )
 
-            gravity = Gravity.CENTER
+            gravity =
+                Gravity.CENTER
         }
 
 
@@ -106,13 +126,17 @@ class MainActivity : AppCompatActivity() {
 
         val subtitle = TextView(this).apply {
 
-            text = "Member Access"
+            text =
+                "Member Access"
 
             textSize = 18f
 
-            setTextColor(Color.LTGRAY)
+            setTextColor(
+                Color.LTGRAY
+            )
 
-            gravity = Gravity.CENTER
+            gravity =
+                Gravity.CENTER
 
             setPadding(
                 0,
@@ -134,7 +158,8 @@ class MainActivity : AppCompatActivity() {
 
         val email = EditText(this).apply {
 
-            hint = "Email member"
+            hint =
+                "Email member"
 
             textSize = 16f
 
@@ -144,9 +169,13 @@ class MainActivity : AppCompatActivity() {
                 InputType.TYPE_CLASS_TEXT or
                 InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS
 
-            setTextColor(Color.WHITE)
+            setTextColor(
+                Color.WHITE
+            )
 
-            setHintTextColor(Color.GRAY)
+            setHintTextColor(
+                Color.GRAY
+            )
 
             setPadding(
                 25,
@@ -164,14 +193,16 @@ class MainActivity : AppCompatActivity() {
                 58.dp()
             ).apply {
 
-                bottomMargin = 18.dp()
+                bottomMargin =
+                    18.dp()
             }
         )
 
 
         val password = EditText(this).apply {
 
-            hint = "Password"
+            hint =
+                "Password"
 
             textSize = 16f
 
@@ -181,9 +212,13 @@ class MainActivity : AppCompatActivity() {
                 InputType.TYPE_CLASS_TEXT or
                 InputType.TYPE_TEXT_VARIATION_PASSWORD
 
-            setTextColor(Color.WHITE)
+            setTextColor(
+                Color.WHITE
+            )
 
-            setHintTextColor(Color.GRAY)
+            setHintTextColor(
+                Color.GRAY
+            )
 
             setPadding(
                 25,
@@ -201,14 +236,16 @@ class MainActivity : AppCompatActivity() {
                 58.dp()
             ).apply {
 
-                bottomMargin = 18.dp()
+                bottomMargin =
+                    18.dp()
             }
         )
 
 
         val button = Button(this).apply {
 
-            text = "LOGIN"
+            text =
+                "LOGIN"
 
             textSize = 15f
 
@@ -223,7 +260,8 @@ class MainActivity : AppCompatActivity() {
                 58.dp()
             ).apply {
 
-                bottomMargin = 18.dp()
+                bottomMargin =
+                    18.dp()
             }
         )
 
@@ -236,9 +274,12 @@ class MainActivity : AppCompatActivity() {
 
             textSize = 14f
 
-            setTextColor(Color.LTGRAY)
+            setTextColor(
+                Color.LTGRAY
+            )
 
-            gravity = Gravity.CENTER
+            gravity =
+                Gravity.CENTER
 
             setPadding(
                 10,
@@ -293,88 +334,107 @@ class MainActivity : AppCompatActivity() {
             }
 
 
-            button.isEnabled = false
+            button.isEnabled =
+                false
 
             info.text =
                 "Memeriksa login..."
 
 
-            auth.signInWithEmailAndPassword(
-                address,
-                pass
-            ).addOnCompleteListener { task ->
+            auth
+                .signInWithEmailAndPassword(
+                    address,
+                    pass
+                )
+                .addOnCompleteListener { task ->
 
-                if (task.isSuccessful) {
+                    if (task.isSuccessful) {
 
-                    val uid =
-                        auth.currentUser?.uid
+                        val uid =
+                            auth.currentUser?.uid
 
 
-                    if (uid != null) {
+                        if (uid != null) {
 
-                        checkMemberAccess(uid)
+                            checkMemberAccess(
+                                uid
+                            )
+
+                        } else {
+
+                            button.isEnabled =
+                                true
+
+                            info.text =
+                                "Login gagal: UID tidak ditemukan."
+                        }
 
                     } else {
 
-                        button.isEnabled = true
+                        button.isEnabled =
+                            true
 
                         info.text =
-                            "Login gagal: UID tidak ditemukan."
+                            task.exception
+                                ?.localizedMessage
+                                ?: "Email atau password salah."
+
+
+                        Toast.makeText(
+                            this,
+                            "Login gagal",
+                            Toast.LENGTH_LONG
+                        ).show()
                     }
-
-                } else {
-
-                    button.isEnabled = true
-
-                    info.text =
-                        task.exception
-                            ?.localizedMessage
-                            ?: "Email atau password salah."
-
-
-                    Toast.makeText(
-                        this,
-                        "Login gagal",
-                        Toast.LENGTH_LONG
-                    ).show()
                 }
-            }
         }
 
 
-        scroll.addView(root)
+        scroll.addView(
+            root
+        )
 
-        setContentView(scroll)
+        setContentView(
+            scroll
+        )
     }
 
 
-    /*
-     * =========================================================
-     * MEMBER ACCESS
-     * =========================================================
-     *
-     * Membaca dokumen:
-     *
-     * members/{UID}
-     *
-     * menggunakan SERVER secara langsung.
-     *
-     * Member hanya boleh masuk jika:
-     *
-     * 1. Dokumen ada
-     * 2. status = ACTIVE
-     *
-     * =========================================================
-     */
+    private fun checkMemberAccess(
+        uid: String
+    ) {
 
-    private fun checkMemberAccess(uid: String) {
+        /*
+         * ADMIN BYPASS
+         *
+         * UID admin langsung dianggap ACTIVE.
+         *
+         * Ini sengaja agar admin tidak bergantung
+         * pada collection members.
+         */
+        if (uid == ADMIN_UID) {
 
+            enterAi()
+
+            return
+        }
+
+
+        /*
+         * MEMBER BIASA
+         *
+         * Member tetap wajib mempunyai:
+         *
+         * members/{UID}
+         *
+         * dengan:
+         *
+         * status = ACTIVE
+         */
         firestore
             .collection("members")
             .document(uid)
-            .get(
-                com.google.firebase.firestore.Source.SERVER
-            )
+            .get(Source.SERVER)
             .addOnSuccessListener { doc ->
 
                 val status =
@@ -435,14 +495,11 @@ class MainActivity : AppCompatActivity() {
     }
 
 
-    /*
-     * =========================================================
-     * MASUK KE AI
-     * =========================================================
-     */
-
     private fun enterAi() {
 
+        /*
+         * Subscribe notifikasi signal
+         */
         FirebaseMessaging
             .getInstance()
             .subscribeToTopic(
@@ -450,6 +507,9 @@ class MainActivity : AppCompatActivity() {
             )
 
 
+        /*
+         * Android 13+
+         */
         if (
             Build.VERSION.SDK_INT >= 33 &&
             ContextCompat.checkSelfPermission(
@@ -468,26 +528,40 @@ class MainActivity : AppCompatActivity() {
         }
 
 
-        webView = WebView(this)
+        /*
+         * WebView AI
+         */
+        webView =
+            WebView(this)
 
-        setContentView(webView)
+
+        setContentView(
+            webView
+        )
 
 
-        webView.settings.javaScriptEnabled = true
+        webView.settings.apply {
 
-        webView.settings.domStorageEnabled = true
+            javaScriptEnabled =
+                true
 
-        webView.settings.loadsImagesAutomatically = true
+            domStorageEnabled =
+                true
 
-        webView.settings.javaScriptCanOpenWindowsAutomatically =
-            true
+            loadsImagesAutomatically =
+                true
 
-        webView.settings.mediaPlaybackRequiresUserGesture =
-            false
+            javaScriptCanOpenWindowsAutomatically =
+                true
+
+            mediaPlaybackRequiresUserGesture =
+                false
+        }
 
 
         webView.webViewClient =
             WebViewClient()
+
 
         webView.webChromeClient =
             WebChromeClient()
@@ -503,16 +577,25 @@ class MainActivity : AppCompatActivity() {
         outState: Bundle
     ) {
 
-        if (::webView.isInitialized) {
+        if (
+            ::webView.isInitialized
+        ) {
 
-            webView.saveState(outState)
+            webView.saveState(
+                outState
+            )
         }
 
-        super.onSaveInstanceState(outState)
+
+        super.onSaveInstanceState(
+            outState
+        )
     }
 
 
-    @Deprecated("Deprecated in Java")
+    @Deprecated(
+        "Deprecated in Java"
+    )
     override fun onBackPressed() {
 
         if (
