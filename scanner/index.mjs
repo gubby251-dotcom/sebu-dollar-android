@@ -81,6 +81,7 @@ function normalizeCandles(payload) {
     .sort((a, b) => a.time - b.time);
 
   /* Remove duplicate candle timestamps */
+
   const result = [];
 
   for (const candle of candles) {
@@ -650,7 +651,8 @@ async function fetchCandles() {
 
 /* =========================================================
    SEND FCM
-   DATA-ONLY + HIGH PRIORITY
+   NOTIFICATION + DATA
+   HIGH PRIORITY
 ========================================================= */
 
 async function sendSignal(signal) {
@@ -669,6 +671,26 @@ async function sendSignal(signal) {
   const message = {
 
     topic: TOPIC,
+
+    /* =====================================================
+       NOTIFICATION PAYLOAD
+
+       Ini yang membuat Firebase/Android dapat
+       menampilkan notifikasi otomatis ketika aplikasi
+       berada di background atau tidak sedang terbuka.
+    ===================================================== */
+
+    notification: {
+      title,
+      body
+    },
+
+    /* =====================================================
+       DATA SIGNAL
+
+       Data signal lama TETAP DIPERTAHANKAN.
+       Tidak mengubah isi signal.
+    ===================================================== */
 
     data: {
 
@@ -703,13 +725,32 @@ async function sendSignal(signal) {
         String(signal.candleTime)
     },
 
+    /* =====================================================
+       ANDROID FCM
+    ===================================================== */
+
     android: {
 
       priority:
         "high",
 
       ttl:
-        60 * 1000
+        60 * 1000,
+
+      notification: {
+
+        channelId:
+          "sebu_signal_channel_v2",
+
+        sound:
+          "default",
+
+        defaultSound:
+          true,
+
+        defaultVibrateTimings:
+          true
+      }
     }
   };
 
