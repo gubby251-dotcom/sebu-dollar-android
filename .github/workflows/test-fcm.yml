@@ -1,0 +1,73 @@
+name: TEST SEBU DOLLAR AI Notification
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test-fcm:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install Firebase Admin
+        run: npm install --no-save firebase-admin
+
+      - name: Send direct FCM test
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+        run: |
+          node --input-type=module <<'EOF'
+          import { initializeApp, cert } from "firebase-admin/app";
+          import { getMessaging } from "firebase-admin/messaging";
+
+          const serviceAccount =
+            JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+
+          initializeApp({
+            credential: cert(serviceAccount)
+          });
+
+          const message = {
+            topic: "sebu_signal_users",
+
+            notification: {
+              title: "SEBU DOLLAR AI — TEST NOTIF",
+              body: "TEST FCM BERHASIL — notifikasi diterima dari server."
+            },
+
+            data: {
+              title: "SEBU DOLLAR AI — TEST NOTIF",
+              body: "TEST FCM BERHASIL — notifikasi diterima dari server.",
+              type: "TEST",
+              symbol: "XAUUSD",
+              timeframe: "M30"
+            },
+
+            android: {
+              priority: "high",
+              ttl: 300000,
+
+              notification: {
+                channelId: "sebu_signal_channel_v2",
+                sound: "default",
+                defaultSound: true,
+                defaultVibrateTimings: true
+              }
+            }
+          };
+
+          const id =
+            await getMessaging().send(message);
+
+          console.log(
+            "FCM TEST BERHASIL DIKIRIM:",
+            id
+          );
+          EOF
