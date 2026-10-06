@@ -1,23 +1,28 @@
-name: SEBU DOLLAR AI Reliable Signal Scanner
+name: SEBU DOLLAR AI Reliable M30 Realtime Scanner
 
 on:
   workflow_dispatch:
 
+  push:
+    branches:
+      - main
+
   schedule:
-    - cron: "3/5 * * * *"
+    - cron: "7 */6 * * *"
 
 permissions:
   contents: read
+  actions: write
 
 concurrency:
-  group: sebu-reliable-signal-scanner
+  group: sebu-realtime-m30-scanner
   cancel-in-progress: false
 
 jobs:
   scan:
     runs-on: ubuntu-latest
 
-    timeout-minutes: 5
+    timeout-minutes: 350
 
     steps:
       - name: Checkout repository
@@ -31,7 +36,59 @@ jobs:
       - name: Install Firebase Admin
         run: npm install --no-save firebase-admin
 
-      - name: Run Reliable M30 Scanner
+      - name: Run Reliable M30 Scanner Continuously
         env:
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
-        run: node scanner/reliable-index.mjs
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -u
+
+          START_TIME=$(date +%s)
+          RUNTIME_LIMIT=$((340 * 60))
+          POLL_SECONDS=20
+          NEXT_WORKFLOW="reliable-signal-scanner.yml"
+
+          echo "========================================"
+          echo "SEBU DOLLAR AI"
+          echo "REALTIME M30 SCANNER"
+          echo "Polling interval: ${POLL_SECONDS}s"
+          echo "Runner handoff before timeout: 340m"
+          echo "========================================"
+
+          while true; do
+
+            NOW=$(date +%s)
+            ELAPSED=$((NOW - START_TIME))
+
+            if [ "$ELAPSED" -ge "$RUNTIME_LIMIT" ]; then
+
+              echo "Mendekati batas runner."
+              echo "Menjalankan handoff ke runner berikutnya..."
+
+              if gh workflow run "$NEXT_WORKFLOW" \
+                --repo "${{ github.repository }}" \
+                --ref main
+              then
+                echo "Handoff runner berikutnya berhasil dijadwalkan."
+              else
+                echo "PERINGATAN: handoff gagal."
+                echo "Backup schedule akan menjadi cadangan."
+              fi
+
+              break
+            fi
+
+            echo "----------------------------------------"
+            echo "Scanner check:"
+            echo "$(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+
+            if node scanner/reliable-index.mjs; then
+              echo "Scanner check selesai."
+            else
+              echo "Scanner error."
+              echo "Tetap hidup dan mencoba lagi."
+            fi
+
+            sleep "${POLL_SECONDS}"
+
+          done
