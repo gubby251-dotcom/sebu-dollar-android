@@ -2877,6 +2877,123 @@ $("waitingMessage").textContent=
 }
 
 
+/* RELIABLE SCANNER → ANDROID/WEBVIEW SYNC
+   Receives a signal already validated by scanner/reliable-index.mjs.
+   IMPORTANT:
+   - No Setup 1–5 re-validation is performed here.
+   - Entry / SL / TP are taken exactly from the scanner payload.
+   - M30 accepts Setup 1/2/3 only.
+   - M15 accepts Setup 4 only.
+   - M5 accepts Setup 5 only.
+*/
+function receiveNativeSignal(payload){
+  try{
+    const p=(typeof payload==="string")?JSON.parse(payload):payload;
+    if(!p) return;
+
+    const tf=String(p.timeframe||"").toUpperCase();
+    const tfMin=Number(
+      p.timeframeMinutes||
+      (tf==="M30"?30:tf==="M15"?15:tf==="M5"?5:0)
+    );
+
+    const setupNumber=Number(
+      p.setupNumber||
+      p.setup||
+      0
+    );
+
+    const type=String(p.type||"").toUpperCase();
+    const entry=Number(p.entry);
+    const sl=Number(p.sl);
+    const tp=Number(p.tp);
+    const candleTime=Number(p.candleTime);
+    const candleCloseTime=
+      Number(p.candleCloseTime)||
+      (candleTime+tfMin*60*1000);
+
+    if(
+      !["BUY","SELL"].includes(type)||
+      !Number.isFinite(entry)||
+      !Number.isFinite(sl)||
+      !Number.isFinite(tp)||
+      !Number.isFinite(candleTime)||
+      ![5,15,30].includes(tfMin)
+    ){
+      console.warn("Reliable scanner payload invalid:",p);
+      return;
+    }
+
+    if(
+      (tfMin===30 && ![1,2,3].includes(setupNumber))||
+      (tfMin===15 && setupNumber!==4)||
+      (tfMin===5 && setupNumber!==5)
+    ){
+      console.warn("Reliable scanner setup/timeframe mismatch:",p);
+      return;
+    }
+
+    const risk=Math.abs(entry-sl);
+
+    if(!Number.isFinite(risk)||!(risk>0)){
+      console.warn("Reliable scanner risk invalid:",p);
+      return;
+    }
+
+    const res={
+      type:type,
+      entry:entry,
+      sl:sl,
+      tp:tp,
+      pips:risk,
+      candleTime:candleTime,
+      candleCloseTime:candleCloseTime,
+      confirmedAt:Date.now(),
+      setupNumber:setupNumber,
+      setupName:String(p.setupName||""),
+      timeframe:tf,
+      timeframeMinutes:tfMin,
+
+      trendText:
+        String(
+          p.trendText||
+          (
+            setupNumber===5
+              ?"SETUP 5 — M5 CONFIRMATION"
+              :setupNumber===4
+                ?"SETUP 4 — M15 CONFIRMATION"
+                :"SETUP "+setupNumber+" — "+String(p.setupName||"")
+          )
+        ),
+
+      engulfText:
+        String(
+          p.engulfText||
+          (
+            tfMin===5
+              ?"M5 CONFIRMED"
+              :tfMin===15
+                ?"M15 CONFIRMED"
+                :"CONFIRMED"
+          )
+        )
+    };
+
+    /*
+     * Pass the scanner-approved result directly into
+     * the existing AI Trade Setup + History pipeline.
+     */
+    triggerValidSignal(res);
+
+  }catch(e){
+    console.warn(
+      "Reliable scanner signal sync error:",
+      e
+    );
+  }
+}
+
+
 /* VALID SIGNAL */
 
 function triggerValidSignal(res){
