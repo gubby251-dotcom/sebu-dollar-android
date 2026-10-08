@@ -1,6 +1,8 @@
 package com.gubby251.sebudollarai
 
 import android.Manifest
+import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Color
 import android.os.Build
@@ -26,6 +28,11 @@ import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.Source
 import com.google.firebase.messaging.FirebaseMessaging
 
+import org.json.JSONArray
+import org.json.JSONObject
+
+import java.lang.ref.WeakReference
+
 
 class MainActivity : AppCompatActivity() {
 
@@ -33,30 +40,209 @@ class MainActivity : AppCompatActivity() {
     private lateinit var auth: FirebaseAuth
     private lateinit var firestore: FirebaseFirestore
 
-    /*
-     * UID ADMIN UTAMA
-     *
-     * Admin tidak lagi bergantung pada dokumen members.
-     * Jadi walaupun collection members kosong,
-     * admin tetap bisa masuk ke AI.
-     */
     private val ADMIN_UID =
         "ilhY96UDI3W9n4Qir4v78nu8G9X2"
 
+    companion object {
 
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
+        private const val TOPIC =
+            "sebu_signal_users"
 
-        auth = FirebaseAuth.getInstance()
-        firestore = FirebaseFirestore.getInstance()
+        private const val PREFS =
+            "sebu_reliable_signal"
+
+        private const val QUEUE_KEY =
+            "pending_signals"
+
+        private var activeInstance:
+            WeakReference<MainActivity>? = null
+
+
+        /*
+         * Dipanggil langsung oleh SignalMessagingService.
+         *
+         * Signal TIDAK divalidasi ulang di sini.
+         * Nilai Entry / SL / TP berasal langsung
+         * dari scanner/reliable-index.mjs.
+         */
+        @JvmStatic
+        fun receiveNativeSignal(
+            data: Map<String, String>
+        ) {
+
+            val activity =
+                activeInstance?.get()
+
+            if (activity != null) {
+
+                activity.receiveSignalOnUi(
+                    data
+                )
+
+            } else {
+
+                enqueueSignal(
+                    data
+                )
+            }
+        }
+
+
+        /*
+         * Simpan signal kalau Activity belum hidup.
+         */
+        private fun enqueueSignal(
+            data: Map<String, String>
+        ) {
+
+            try {
+
+                val context =
+                    AppContextHolder.context
+                        ?: return
+
+                val prefs =
+                    context.getSharedPreferences(
+                        PREFS,
+                        Context.MODE_PRIVATE
+                    )
+
+                val array =
+                    JSONArray(
+                        prefs.getString(
+                            QUEUE_KEY,
+                            "[]"
+                        ) ?: "[]"
+                    )
+
+                val obj =
+                    JSONObject()
+
+                for ((key, value) in data) {
+                    obj.put(
+                        key,
+                        value
+                    )
+                }
+
+                val key =
+                    signalKey(obj)
+
+                /*
+                 * Jangan masukkan signal yang sama
+                 * dua kali.
+                 */
+                for (i in 0 until array.length()) {
+
+                    val old =
+                        array.optJSONObject(i)
+
+                    if (
+                        old != null &&
+                        signalKey(old) == key
+                    ) {
+                        return
+                    }
+                }
+
+                array.put(obj)
+
+                /*
+                 * Simpan maksimal 20 signal.
+                 */
+                while (array.length() > 20) {
+                    array.remove(0)
+                }
+
+                prefs.edit()
+                    .putString(
+                        QUEUE_KEY,
+                        array.toString()
+                    )
+                    .apply()
+
+            } catch (e: Exception) {
+
+                e.printStackTrace()
+            }
+        }
+
+
+        private fun signalKey(
+            obj: JSONObject
+        ): String {
+
+            return (
+                obj.optString("setup") +
+                "_" +
+                obj.optString("timeframe") +
+                "_" +
+                obj.optString("type") +
+                "_" +
+                obj.optString("candleTime")
+            )
+        }
+    }
+
+
+    override fun onCreate(
+        savedInstanceState: Bundle?
+    ) {
+
+        super.onCreate(
+            savedInstanceState
+        )
+
+        AppContextHolder.context =
+            applicationContext
+
+        activeInstance =
+            WeakReference(this)
+
+        auth =
+            FirebaseAuth.getInstance()
+
+        firestore =
+            FirebaseFirestore.getInstance()
 
         continueWithCurrentUser()
     }
 
 
+    override fun onNewIntent(
+        intent: Intent?
+    ) {
+
+        super.onNewIntent(intent)
+
+        setIntent(intent)
+
+        /*
+         * Kalau user membuka APK dari
+         * notifikasi FCM, data signal ada
+         * di Intent.
+         */
+        if (intent != null) {
+
+            val signal =
+                extractSignalFromIntent(
+                    intent
+                )
+
+            if (signal.isNotEmpty()) {
+
+                receiveNativeSignal(
+                    signal
+                )
+            }
+        }
+    }
+
+
     private fun continueWithCurrentUser() {
 
-        val user = auth.currentUser
+        val user =
+            auth.currentUser
 
         if (user == null) {
 
@@ -64,7 +250,9 @@ class MainActivity : AppCompatActivity() {
 
         } else {
 
-            checkMemberAccess(user.uid)
+            checkMemberAccess(
+                user.uid
+            )
         }
     }
 
@@ -73,46 +261,51 @@ class MainActivity : AppCompatActivity() {
         message: String? = null
     ) {
 
-        val scroll = ScrollView(this)
+        val scroll =
+            ScrollView(this)
 
-        val root = LinearLayout(this).apply {
+        val root =
+            LinearLayout(this).apply {
 
-            orientation = LinearLayout.VERTICAL
+                orientation =
+                    LinearLayout.VERTICAL
 
-            gravity =
-                Gravity.CENTER_HORIZONTAL
+                gravity =
+                    Gravity.CENTER_HORIZONTAL
 
-            setPadding(
-                40,
-                70,
-                40,
-                40
-            )
-
-            setBackgroundColor(
-                Color.rgb(
-                    18,
-                    18,
-                    18
+                setPadding(
+                    40,
+                    70,
+                    40,
+                    40
                 )
-            )
-        }
+
+                setBackgroundColor(
+                    Color.rgb(
+                        18,
+                        18,
+                        18
+                    )
+                )
+            }
 
 
-        val title = TextView(this).apply {
+        val title =
+            TextView(this).apply {
 
-            text =
-                "SEBU DOLLAR AI"
+                text =
+                    "SEBU DOLLAR AI"
 
-            textSize = 26f
+                textSize =
+                    26f
 
-            setTextColor(
-                Color.WHITE
-            )
+                setTextColor(
+                    Color.WHITE
+                )
 
-            gravity =
-                Gravity.CENTER
-        }
+                gravity =
+                    Gravity.CENTER
+            }
 
 
         root.addView(
@@ -124,27 +317,29 @@ class MainActivity : AppCompatActivity() {
         )
 
 
-        val subtitle = TextView(this).apply {
+        val subtitle =
+            TextView(this).apply {
 
-            text =
-                "Member Access"
+                text =
+                    "Member Access"
 
-            textSize = 18f
+                textSize =
+                    18f
 
-            setTextColor(
-                Color.LTGRAY
-            )
+                setTextColor(
+                    Color.LTGRAY
+                )
 
-            gravity =
-                Gravity.CENTER
+                gravity =
+                    Gravity.CENTER
 
-            setPadding(
-                0,
-                10,
-                0,
-                35
-            )
-        }
+                setPadding(
+                    0,
+                    10,
+                    0,
+                    35
+                )
+            }
 
 
         root.addView(
@@ -156,34 +351,36 @@ class MainActivity : AppCompatActivity() {
         )
 
 
-        val email = EditText(this).apply {
+        val email =
+            EditText(this).apply {
 
-            hint =
-                "Email member"
+                hint =
+                    "Email member"
 
-            textSize = 16f
+                textSize =
+                    16f
 
-            setSingleLine(true)
+                setSingleLine(true)
 
-            inputType =
-                InputType.TYPE_CLASS_TEXT or
-                InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS
+                inputType =
+                    InputType.TYPE_CLASS_TEXT or
+                    InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS
 
-            setTextColor(
-                Color.WHITE
-            )
+                setTextColor(
+                    Color.WHITE
+                )
 
-            setHintTextColor(
-                Color.GRAY
-            )
+                setHintTextColor(
+                    Color.GRAY
+                )
 
-            setPadding(
-                25,
-                0,
-                25,
-                0
-            )
-        }
+                setPadding(
+                    25,
+                    0,
+                    25,
+                    0
+                )
+            }
 
 
         root.addView(
@@ -199,34 +396,36 @@ class MainActivity : AppCompatActivity() {
         )
 
 
-        val password = EditText(this).apply {
+        val password =
+            EditText(this).apply {
 
-            hint =
-                "Password"
+                hint =
+                    "Password"
 
-            textSize = 16f
+                textSize =
+                    16f
 
-            setSingleLine(true)
+                setSingleLine(true)
 
-            inputType =
-                InputType.TYPE_CLASS_TEXT or
-                InputType.TYPE_TEXT_VARIATION_PASSWORD
+                inputType =
+                    InputType.TYPE_CLASS_TEXT or
+                    InputType.TYPE_TEXT_VARIATION_PASSWORD
 
-            setTextColor(
-                Color.WHITE
-            )
+                setTextColor(
+                    Color.WHITE
+                )
 
-            setHintTextColor(
-                Color.GRAY
-            )
+                setHintTextColor(
+                    Color.GRAY
+                )
 
-            setPadding(
-                25,
-                0,
-                25,
-                0
-            )
-        }
+                setPadding(
+                    25,
+                    0,
+                    25,
+                    0
+                )
+            }
 
 
         root.addView(
@@ -242,15 +441,18 @@ class MainActivity : AppCompatActivity() {
         )
 
 
-        val button = Button(this).apply {
+        val button =
+            Button(this).apply {
 
-            text =
-                "LOGIN"
+                text =
+                    "LOGIN"
 
-            textSize = 15f
+                textSize =
+                    15f
 
-            isAllCaps = false
-        }
+                isAllCaps =
+                    false
+            }
 
 
         root.addView(
@@ -266,28 +468,30 @@ class MainActivity : AppCompatActivity() {
         )
 
 
-        val info = TextView(this).apply {
+        val info =
+            TextView(this).apply {
 
-            text =
-                message
-                    ?: "Gunakan email dan password yang diberikan admin."
+                text =
+                    message
+                        ?: "Gunakan email dan password yang diberikan admin."
 
-            textSize = 14f
+                textSize =
+                    14f
 
-            setTextColor(
-                Color.LTGRAY
-            )
+                setTextColor(
+                    Color.LTGRAY
+                )
 
-            gravity =
-                Gravity.CENTER
+                gravity =
+                    Gravity.CENTER
 
-            setPadding(
-                10,
-                10,
-                10,
-                10
-            )
-        }
+                setPadding(
+                    10,
+                    10,
+                    10,
+                    10
+                )
+            }
 
 
         root.addView(
@@ -353,7 +557,6 @@ class MainActivity : AppCompatActivity() {
                         val uid =
                             auth.currentUser?.uid
 
-
                         if (uid != null) {
 
                             checkMemberAccess(
@@ -379,7 +582,6 @@ class MainActivity : AppCompatActivity() {
                                 ?.localizedMessage
                                 ?: "Email atau password salah."
 
-
                         Toast.makeText(
                             this,
                             "Login gagal",
@@ -404,14 +606,6 @@ class MainActivity : AppCompatActivity() {
         uid: String
     ) {
 
-        /*
-         * ADMIN BYPASS
-         *
-         * UID admin langsung dianggap ACTIVE.
-         *
-         * Ini sengaja agar admin tidak bergantung
-         * pada collection members.
-         */
         if (uid == ADMIN_UID) {
 
             enterAi()
@@ -420,17 +614,6 @@ class MainActivity : AppCompatActivity() {
         }
 
 
-        /*
-         * MEMBER BIASA
-         *
-         * Member tetap wajib mempunyai:
-         *
-         * members/{UID}
-         *
-         * dengan:
-         *
-         * status = ACTIVE
-         */
         firestore
             .collection("members")
             .document(uid)
@@ -441,7 +624,6 @@ class MainActivity : AppCompatActivity() {
                     doc.get("status")
                         ?.toString()
                         ?.trim()
-
 
                 val active =
                     doc.exists() &&
@@ -460,12 +642,10 @@ class MainActivity : AppCompatActivity() {
                     FirebaseMessaging
                         .getInstance()
                         .unsubscribeFromTopic(
-                            "sebu_signal_users"
+                            TOPIC
                         )
 
-
                     auth.signOut()
-
 
                     showLoginScreen(
                         "Akun belum mendapat akses ACTIVE dari admin."
@@ -477,12 +657,10 @@ class MainActivity : AppCompatActivity() {
                 FirebaseMessaging
                     .getInstance()
                     .unsubscribeFromTopic(
-                        "sebu_signal_users"
+                        TOPIC
                     )
 
-
                 auth.signOut()
-
 
                 showLoginScreen(
                     "Tidak dapat memeriksa akses member.\n" +
@@ -497,19 +675,13 @@ class MainActivity : AppCompatActivity() {
 
     private fun enterAi() {
 
-        /*
-         * Subscribe notifikasi signal
-         */
         FirebaseMessaging
             .getInstance()
             .subscribeToTopic(
-                "sebu_signal_users"
+                TOPIC
             )
 
 
-        /*
-         * Android 13+
-         */
         if (
             Build.VERSION.SDK_INT >= 33 &&
             ContextCompat.checkSelfPermission(
@@ -528,9 +700,6 @@ class MainActivity : AppCompatActivity() {
         }
 
 
-        /*
-         * WebView AI
-         */
         webView =
             WebView(this)
 
@@ -560,7 +729,42 @@ class MainActivity : AppCompatActivity() {
 
 
         webView.webViewClient =
-            WebViewClient()
+            object : WebViewClient() {
+
+                override fun onPageFinished(
+                    view: WebView?,
+                    url: String?
+                ) {
+
+                    super.onPageFinished(
+                        view,
+                        url
+                    )
+
+                    /*
+                     * Setelah index.html selesai,
+                     * kirim semua signal FCM yang
+                     * sempat menunggu.
+                     */
+                    flushPendingSignals()
+
+                    /*
+                     * Kalau Activity dibuka melalui
+                     * notifikasi, proses Intent juga.
+                     */
+                    val signal =
+                        extractSignalFromIntent(
+                            intent
+                        )
+
+                    if (signal.isNotEmpty()) {
+
+                        receiveSignalOnUi(
+                            signal
+                        )
+                    }
+                }
+            }
 
 
         webView.webChromeClient =
@@ -570,6 +774,214 @@ class MainActivity : AppCompatActivity() {
         webView.loadUrl(
             "file:///android_asset/index.html"
         )
+    }
+
+
+    /*
+     * Dipanggil saat signal masuk ketika
+     * MainActivity sedang hidup.
+     */
+    private fun receiveSignalOnUi(
+        data: Map<String, String>
+    ) {
+
+        runOnUiThread {
+
+            try {
+
+                if (
+                    !::webView.isInitialized
+                ) {
+
+                    enqueueSignal(
+                        data
+                    )
+
+                    return@runOnUiThread
+                }
+
+
+                val json =
+                    JSONObject()
+
+                for ((key, value) in data) {
+
+                    json.put(
+                        key,
+                        value
+                    )
+                }
+
+
+                /*
+                 * Jangan hitung ulang:
+                 *
+                 * Entry
+                 * SL
+                 * TP
+                 *
+                 * semuanya berasal dari
+                 * reliable scanner.
+                 */
+                val jsArgument =
+                    JSONObject.quote(
+                        json.toString()
+                    )
+
+
+                webView.evaluateJavascript(
+                    """
+                    if (typeof window.receiveNativeSignal === 'function') {
+                        window.receiveNativeSignal($jsArgument);
+                    }
+                    """.trimIndent(),
+                    null
+                )
+
+            } catch (e: Exception) {
+
+                e.printStackTrace()
+
+                enqueueSignal(
+                    data
+                )
+            }
+        }
+    }
+
+
+    /*
+     * Kirim seluruh signal yang masuk ketika
+     * WebView belum siap.
+     */
+    private fun flushPendingSignals() {
+
+        try {
+
+            val prefs =
+                getSharedPreferences(
+                    PREFS,
+                    MODE_PRIVATE
+                )
+
+            val raw =
+                prefs.getString(
+                    QUEUE_KEY,
+                    "[]"
+                ) ?: "[]"
+
+            val array =
+                JSONArray(raw)
+
+            if (array.length() == 0) {
+                return
+            }
+
+
+            for (i in 0 until array.length()) {
+
+                val obj =
+                    array.optJSONObject(i)
+                        ?: continue
+
+                val map =
+                    mutableMapOf<String, String>()
+
+                val keys =
+                    obj.keys()
+
+                while (keys.hasNext()) {
+
+                    val key =
+                        keys.next()
+
+                    map[key] =
+                        obj.optString(key)
+                }
+
+                receiveSignalOnUi(
+                    map
+                )
+            }
+
+
+            prefs.edit()
+                .remove(QUEUE_KEY)
+                .apply()
+
+        } catch (e: Exception) {
+
+            e.printStackTrace()
+        }
+    }
+
+
+    /*
+     * Ambil data signal dari Intent
+     * yang dibawa notification FCM.
+     */
+    private fun extractSignalFromIntent(
+        intent: Intent?
+    ): Map<String, String> {
+
+        val result =
+            mutableMapOf<String, String>()
+
+        if (intent == null) {
+            return result
+        }
+
+
+        val extras =
+            intent.extras
+                ?: return result
+
+
+        val keys =
+            extras.keySet()
+
+        for (key in keys) {
+
+            val value =
+                extras.get(key)
+
+            if (value != null) {
+
+                result[key] =
+                    value.toString()
+            }
+        }
+
+
+        /*
+         * Pastikan ini memang signal scanner.
+         */
+        val type =
+            result["type"]
+                ?.uppercase()
+
+        val setup =
+            result["setup"]
+                ?: result["setupNumber"]
+
+        val timeframe =
+            result["timeframe"]
+
+
+        if (
+            type !in listOf(
+                "BUY",
+                "SELL"
+            ) ||
+            setup.isNullOrBlank() ||
+            timeframe.isNullOrBlank()
+        ) {
+
+            result.clear()
+        }
+
+
+        return result
     }
 
 
@@ -590,6 +1002,20 @@ class MainActivity : AppCompatActivity() {
         super.onSaveInstanceState(
             outState
         )
+    }
+
+
+    override fun onDestroy() {
+
+        if (
+            activeInstance?.get() === this
+        ) {
+
+            activeInstance =
+                null
+        }
+
+        super.onDestroy()
     }
 
 
@@ -618,5 +1044,15 @@ class MainActivity : AppCompatActivity() {
             this *
             resources.displayMetrics.density
         ).toInt()
+    }
+
+
+    /*
+     * Context sederhana untuk FCM service.
+     */
+    private object AppContextHolder {
+
+        var context: Context? =
+            null
     }
 }
