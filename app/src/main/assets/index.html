@@ -3196,87 +3196,109 @@ res.type==="BUY"
 function processPendingSignalsAtPrice(price){
   if(!Number.isFinite(price)) return false;
 
-  /* SETUP 4 signal formation remains strictly M15.
-     For History status, live price is allowed to update Entry/TP/SL
-     immediately, just like the existing M30 setups. This removes the
-     unnecessary wait for the next M15 candle to close. */
-  const pendingList=signalHistory.filter(s=>
-    s &&
-    s.status==="PENDING"
-  );
+  /*
+    STATUS ENGINE ONLY.
+    Signal formation, Setup 1/2/3/4/5 rules and Entry/SL/TP values are
+    untouched. This function only moves an EXISTING PENDING signal through
+    Entry -> HIT TP / HIT SL.
+
+    Important recovery rule:
+    - A live tick at/through Entry marks Entry touched.
+    - A live tick at/through TP/SL may recover a missed Entry ONLY when the
+      signal has already been observed by this page before that tick.
+      This prevents a newly-restored signal whose current price is already
+      above TP from being falsely marked HIT TP without a retracement.
+    - Historical candle recovery remains the safety net for signals missed
+      while the page was backgrounded/suspended.
+  */
+  const pendingList=signalHistory.filter(s=>s && s.status==="PENDING");
   if(!pendingList.length){
     syncAiTradeSetup();
     return false;
   }
 
   let changed=false;
+  const now=Date.now();
 
   pendingList.forEach(s=>{
     const entry=Number(s.entry);
     const sl=Number(s.sl);
     const tp=Number(s.tp);
-
     if(!Number.isFinite(entry)||!Number.isFinite(sl)||!Number.isFinite(tp)) return;
 
-    /* Live tick: Entry must be touched before TP/SL becomes active. */
+    /* Normal live Entry detection. */
     if(!s.entryTouched){
-      const touched=s.type==="BUY"
-        ? price<=entry
-        : price>=entry;
+      const touched=s.type==="BUY" ? price<=entry : price>=entry;
 
       if(touched){
         s.entryTouched=true;
-        s.entryTouchedAt=Date.now();
+        s.entryTouchedAt=s.entryTouchedAt||now;
+        s.entryTouchedRecovered=false;
         changed=true;
 
-        /* M15/M5: if this fresh tick has already crossed SL/TP,
-           finalize immediately. Do not leave History PENDING. */
-        const fastSetup=(Number(s.setupNumber)===4||Number(s.setupNumber)===5);
-        if(fastSetup){
-          if(s.type==="BUY" && price>=tp){
-            s.status="HIT TP"; s.closedAt=Date.now(); s.closePrice=price;
-            changed=true; return;
+        /* If this SAME live tick also crosses a target, finalize immediately. */
+        if(s.type==="BUY"){
+          if(price>=tp){
+            s.status="HIT TP";
+            s.closedAt=now;
+            s.closePrice=price;
+            return;
           }
-          if(s.type==="BUY" && price<=sl){
-            s.status="HIT SL"; s.closedAt=Date.now(); s.closePrice=price;
-            changed=true; return;
+          if(price<=sl){
+            s.status="HIT SL";
+            s.closedAt=now;
+            s.closePrice=price;
+            return;
           }
-          if(s.type==="SELL" && price<=tp){
-            s.status="HIT TP"; s.closedAt=Date.now(); s.closePrice=price;
-            changed=true; return;
+        }else{
+          if(price<=tp){
+            s.status="HIT TP";
+            s.closedAt=now;
+            s.closePrice=price;
+            return;
           }
-          if(s.type==="SELL" && price>=sl){
-            s.status="HIT SL"; s.closedAt=Date.now(); s.closePrice=price;
-            changed=true; return;
+          if(price>=sl){
+            s.status="HIT SL";
+            s.closedAt=now;
+            s.closePrice=price;
+            return;
           }
         }
       }else{
+        /*
+          Do NOT mark TP/SL from the current price alone on a restored page.
+          The signal may have been created while price was already beyond TP.
+          Historical candle recovery below is responsible for proving that
+          Entry was actually crossed first.
+        */
         return;
       }
     }
 
-    /* Once Entry is touched, the current live price can close the setup. */
+    /* Entry has been confirmed. Live price can now close the signal. */
+    if(s.status!=="PENDING") return;
+
     if(s.type==="BUY"){
       if(price>=tp){
         s.status="HIT TP";
-        s.closedAt=Date.now();
+        s.closedAt=now;
         s.closePrice=price;
         changed=true;
       }else if(price<=sl){
         s.status="HIT SL";
-        s.closedAt=Date.now();
+        s.closedAt=now;
         s.closePrice=price;
         changed=true;
       }
     }else{
       if(price<=tp){
         s.status="HIT TP";
-        s.closedAt=Date.now();
+        s.closedAt=now;
         s.closePrice=price;
         changed=true;
       }else if(price>=sl){
         s.status="HIT SL";
-        s.closedAt=Date.now();
+        s.closedAt=now;
         s.closePrice=price;
         changed=true;
       }
@@ -3315,94 +3337,86 @@ function processPendingSignalsFromCandles(candles,livePrice){
     const signalTime=Number(s.candleTime);
     if(!Number.isFinite(entry)||!Number.isFinite(sl)||!Number.isFinite(tp)||!Number.isFinite(signalTime)) continue;
 
-    /* The candle source passed here is already CLOSED.
-       Setup 4 uses M15 only; Setup 1/2/3 keep their existing M30 source. */
-    const signalCloseTime = Number(s.candleCloseTime) || (signalTime+signalTfMs);
-    const firstMonitoringBar = signalCloseTime;
+    const signalCloseTime=Number(s.candleCloseTime)||(signalTime+signalTfMs);
     const afterSignal=candles
-      .filter(c=>Number(c.time)>=firstMonitoringBar)
+      .filter(c=>Number(c.time)>=signalCloseTime)
       .sort((a,b)=>Number(a.time)-Number(b.time));
 
     for(const c of afterSignal){
       const high=Number(c.high);
       const low=Number(c.low);
-      if(!Number.isFinite(high)||!Number.isFinite(low)) continue;
+      const candleTime=Number(c.time);
+      if(!Number.isFinite(high)||!Number.isFinite(low)||!Number.isFinite(candleTime)) continue;
+      if(s.status!=="PENDING") break;
 
-      /* Recover a missed Entry touch from candle range.
-         OHLC does not reveal the order of prices inside one candle, so a
-         candle that first touches Entry must never also close at TP/SL. */
+      /*
+        RECOVERY RULE:
+        Find the FIRST candle after the signal close that proves Entry was
+        crossed. Once Entry is proven, every later candle may settle TP/SL.
+        This works even when Android/Chrome missed all live ticks while the
+        page was minimized or suspended.
+      */
       if(!s.entryTouched){
-        const entryHit=s.type==="BUY"
-          ? low<=entry
-          : high>=entry;
+        const entryHit=s.type==="BUY" ? low<=entry : high>=entry;
+        if(!entryHit) continue;
 
-        if(entryHit){
-          s.entryTouched=true;
-          s.entryTouchedAt=s.entryTouchedAt||Date.now();
-          s.entryTouchedCandleTime=Number(c.time);
+        s.entryTouched=true;
+        s.entryTouchedAt=s.entryTouchedAt||Date.now();
+        s.entryTouchedCandleTime=candleTime;
+        s.entryTouchedRecovered=true;
+        changed=true;
+
+        /*
+          If this FIRST Entry candle reaches exactly one target, the result
+          is deterministic. If it reaches both, OHLC cannot reveal which
+          came first, so keep PENDING and wait for a later candle/live tick.
+        */
+        const sameBarTp=s.type==="BUY" ? high>=tp : low<=tp;
+        const sameBarSl=s.type==="BUY" ? low<=sl : high>=sl;
+
+        if(sameBarTp && !sameBarSl){
+          s.status="HIT TP";
+          s.closedAt=Date.now();
+          s.closePrice=tp;
           changed=true;
-
-          /* For M15/M5 recovery, a closed candle can immediately settle
-             the signal when it touches only one of TP/SL. If both are
-             inside the same candle, OHLC cannot reveal which came first,
-             so keep PENDING rather than guessing. */
-          /*
-             Recovery fix — applies to M30, M15 and M5.
-             If the same CLOSED candle that first recovers the missed Entry
-             also reaches exactly one of TP/SL, the result is knowable:
-             - only TP inside the candle -> HIT TP
-             - only SL inside the candle -> HIT SL
-             - both TP and SL inside the candle -> keep PENDING because
-               OHLC cannot reveal which level was reached first.
-          */
-          const sameBarTp=s.type==="BUY" ? high>=tp : low<=tp;
-          const sameBarSl=s.type==="BUY" ? low<=sl : high>=sl;
-
-          if(sameBarTp && !sameBarSl){
-            s.status="HIT TP";
-            s.closedAt=Date.now();
-            s.closePrice=tp;
-            changed=true;
-            break;
-          }
-
-          if(sameBarSl && !sameBarTp){
-            s.status="HIT SL";
-            s.closedAt=Date.now();
-            s.closePrice=sl;
-            changed=true;
-            break;
-          }
-
-          /* Both levels were inside the same candle: do not guess. */
-          continue;
-        }else{
-          continue;
+          break;
         }
-      }
 
-      /* If Entry was touched by a live tick, let live ticks alone close it.
-         If OHLC recovered Entry, only later candles may confirm TP/SL. */
-      const entryBarTime=Number(s.entryTouchedCandleTime);
-      if(!Number.isFinite(entryBarTime) || Number(c.time)<=entryBarTime){
+        if(sameBarSl && !sameBarTp){
+          s.status="HIT SL";
+          s.closedAt=Date.now();
+          s.closePrice=sl;
+          changed=true;
+          break;
+        }
+
+        /* Both TP and SL in the same candle: do not guess. */
         continue;
       }
 
-      if(s.status!=="PENDING") break;
+      /*
+        If Entry was detected by a live tick but no candle timestamp was
+        stored (older History records), use signal close time as the recovery
+        boundary. This removes the old dead-end where entryTouched=true but
+        candle recovery could never proceed because entryTouchedCandleTime
+        was missing.
+      */
+      const entryBarTime=Number(s.entryTouchedCandleTime);
+      if(!Number.isFinite(entryBarTime)){
+        s.entryTouchedCandleTime=candleTime;
+        changed=true;
+        continue;
+      }
+
+      if(candleTime<=entryBarTime) continue;
 
       const hitTp=s.type==="BUY" ? high>=tp : low<=tp;
       const hitSl=s.type==="BUY" ? low<=sl : high>=sl;
-
       if(!hitTp && !hitSl) continue;
 
-      /*
-        If both TP and SL are inside one OHLC candle, OHLC cannot tell which
-        was hit first. Do not guess.
-        Setup 4 is strictly M15, so never use a live tick to override M15.
-        Existing M30 behavior for Setup 1/2/3 remains unchanged.
-      */
+      /* Both targets inside the same later OHLC candle: never guess order. */
       if(hitTp && hitSl){
-        const p=Number(s.setupNumber)===4 ? NaN : Number(livePrice);
+        const p=Number(livePrice);
         if(Number.isFinite(p)){
           if(s.type==="BUY" && p>=tp){
             s.status="HIT TP";
@@ -3450,6 +3464,38 @@ function processPendingSignalsFromCandles(candles,livePrice){
         s.closePrice=sl;
         changed=true;
         break;
+      }
+    }
+
+    /*
+      Final live-price recovery after historical Entry proof.
+      Once Entry is known to have been touched, current live price can safely
+      close the signal immediately without waiting for the next candle close.
+    */
+    if(s.status==="PENDING" && s.entryTouched){
+      const p=Number(livePrice);
+      if(Number.isFinite(p)){
+        if(s.type==="BUY" && p>=tp){
+          s.status="HIT TP";
+          s.closedAt=Date.now();
+          s.closePrice=p;
+          changed=true;
+        }else if(s.type==="BUY" && p<=sl){
+          s.status="HIT SL";
+          s.closedAt=Date.now();
+          s.closePrice=p;
+          changed=true;
+        }else if(s.type==="SELL" && p<=tp){
+          s.status="HIT TP";
+          s.closedAt=Date.now();
+          s.closePrice=p;
+          changed=true;
+        }else if(s.type==="SELL" && p>=sl){
+          s.status="HIT SL";
+          s.closedAt=Date.now();
+          s.closePrice=p;
+          changed=true;
+        }
       }
     }
   }
