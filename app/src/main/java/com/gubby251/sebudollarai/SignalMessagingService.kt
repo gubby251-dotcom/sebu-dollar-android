@@ -9,45 +9,71 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.media.AudioAttributes
 import android.os.Build
+
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
+
 import com.google.firebase.messaging.FirebaseMessaging
 import com.google.firebase.messaging.FirebaseMessagingService
 import com.google.firebase.messaging.RemoteMessage
 
+
 class SignalMessagingService : FirebaseMessagingService() {
 
     companion object {
-        private const val TOPIC = "sebu_signal_users"
-        private const val CHANNEL_ID = "sebu_signal_channel_v2"
+
+        private const val TOPIC =
+            "sebu_signal_users"
+
+        private const val CHANNEL_ID =
+            "sebu_signal_channel_v2"
     }
 
-    override fun onMessageReceived(message: RemoteMessage) {
 
-        val title = message.data["title"]
-            ?: message.notification?.title
-            ?: "SEBU DOLLAR AI"
-
-        val body = message.data["body"]
-            ?: message.notification?.body
-            ?: "Signal baru diterima"
+    override fun onMessageReceived(
+        message: RemoteMessage
+    ) {
 
         /*
-         * KIRIM SIGNAL SCANNER KE MAIN ACTIVITY
+         * Ambil data signal dari reliable scanner.
+         */
+        val title =
+            message.data["title"]
+                ?: message.notification?.title
+                ?: "SEBU DOLLAR AI"
+
+
+        val body =
+            message.data["body"]
+                ?: message.notification?.body
+                ?: "Signal baru diterima"
+
+
+        /*
+         * =====================================================
+         * RELIABLE SCANNER → MAIN ACTIVITY
+         * =====================================================
          *
-         * Tidak mengubah logika scanner.
-         * Tidak menghitung ulang Entry / SL / TP.
-         * Data yang dikirim adalah data asli dari reliable scanner.
+         * Data Entry / SL / TP / Setup / Timeframe
+         * dikirim langsung ke MainActivity.
+         *
+         * Tidak ada validasi ulang di sini.
          */
         if (message.data.isNotEmpty()) {
+
             MainActivity.receiveNativeSignal(
                 message.data
             )
         }
 
+
         /*
-         * NOTIFIKASI TETAP SAMA
+         * =====================================================
+         * NOTIFICATION
+         * =====================================================
+         *
+         * Sistem notifikasi dan suara tetap digunakan.
          */
         showNotification(
             title,
@@ -56,13 +82,23 @@ class SignalMessagingService : FirebaseMessagingService() {
         )
     }
 
-    override fun onNewToken(token: String) {
+
+    override fun onNewToken(
+        token: String
+    ) {
+
         super.onNewToken(token)
 
+        /*
+         * Tetap subscribe ke topic signal.
+         */
         FirebaseMessaging
             .getInstance()
-            .subscribeToTopic(TOPIC)
+            .subscribeToTopic(
+                TOPIC
+            )
     }
+
 
     private fun showNotification(
         title: String,
@@ -70,100 +106,137 @@ class SignalMessagingService : FirebaseMessagingService() {
         data: Map<String, String> = emptyMap()
     ) {
 
-        if (
-            Build.VERSION.SDK_INT >=
-            Build.VERSION_CODES.TIRAMISU &&
-            ContextCompat.checkSelfPermission(
-                this,
-                Manifest.permission.POST_NOTIFICATIONS
-            ) != PackageManager.PERMISSION_GRANTED
-        ) {
-            return
-        }
-
+        /*
+         * Android 8+
+         */
         createNotificationChannel()
 
-        val intent = Intent(
-            this,
-            MainActivity::class.java
-        ).apply {
 
-            flags =
-                Intent.FLAG_ACTIVITY_NEW_TASK or
-                Intent.FLAG_ACTIVITY_CLEAR_TOP or
-                Intent.FLAG_ACTIVITY_SINGLE_TOP
+        /*
+         * Intent menuju MainActivity.
+         *
+         * Data signal ikut dibawa supaya ketika
+         * user menekan notification, MainActivity
+         * tetap bisa menerima signal tersebut.
+         */
+        val intent =
+            Intent(
+                this,
+                MainActivity::class.java
+            ).apply {
 
-            /*
-             * Simpan seluruh data scanner ke Intent.
-             *
-             * Ini penting ketika aplikasi berada
-             * di background / notification ditekan.
-             */
-            for ((key, value) in data) {
-                putExtra(key, value)
+                flags =
+                    Intent.FLAG_ACTIVITY_NEW_TASK or
+                    Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                    Intent.FLAG_ACTIVITY_SINGLE_TOP
+
+
+                for (
+                    (key, value)
+                    in data
+                ) {
+
+                    putExtra(
+                        key,
+                        value
+                    )
+                }
             }
-        }
+
 
         val pendingIntent =
             PendingIntent.getActivity(
                 this,
-                0,
+                1001,
                 intent,
                 PendingIntent.FLAG_UPDATE_CURRENT or
                 PendingIntent.FLAG_IMMUTABLE
             )
 
-        val notification =
-            NotificationCompat.Builder(
-                this,
-                CHANNEL_ID
-            )
-                .setSmallIcon(
-                    android.R.drawable.ic_dialog_info
+
+        /*
+         * Notification.
+         */
+        val builder =
+            NotificationCompat
+                .Builder(
+                    this,
+                    CHANNEL_ID
                 )
-                .setContentTitle(title)
-                .setContentText(body)
+                .setSmallIcon(
+                    applicationInfo.icon
+                )
+                .setContentTitle(
+                    title
+                )
+                .setContentText(
+                    body
+                )
                 .setStyle(
-                    NotificationCompat.BigTextStyle()
+                    NotificationCompat
+                        .BigTextStyle()
                         .bigText(body)
                 )
                 .setPriority(
-                    NotificationCompat.PRIORITY_HIGH
+                    NotificationCompat
+                        .PRIORITY_HIGH
                 )
                 .setCategory(
-                    NotificationCompat.CATEGORY_ALARM
+                    NotificationCompat
+                        .CATEGORY_ALARM
                 )
-                .setAutoCancel(true)
-                .setVibrate(
-                    longArrayOf(
-                        0,
-                        300,
-                        150,
-                        300
-                    )
+                .setAutoCancel(
+                    true
                 )
                 .setContentIntent(
                     pendingIntent
                 )
-                .build()
+                .setVibrate(
+                    longArrayOf(
+                        0,
+                        500,
+                        250,
+                        500
+                    )
+                )
 
+
+        /*
+         * Android lama:
+         * gunakan default notification sound.
+         *
+         * Android 8+:
+         * sound dikontrol oleh Notification Channel.
+         */
+        if (Build.VERSION.SDK_INT < 26) {
+
+            builder.setDefaults(
+                android.app.Notification.DEFAULT_SOUND
+            )
+        }
+
+
+        /*
+         * Tampilkan notification.
+         */
         if (
-            NotificationManagerCompat
-                .from(this)
-                .areNotificationsEnabled()
+            Build.VERSION.SDK_INT < 33 ||
+            ContextCompat.checkSelfPermission(
+                this,
+                Manifest.permission.POST_NOTIFICATIONS
+            ) == PackageManager.PERMISSION_GRANTED
         ) {
 
             NotificationManagerCompat
                 .from(this)
                 .notify(
-                    (
-                        System.currentTimeMillis()
-                        and 0x7FFFFFFF
-                    ).toInt(),
-                    notification
+                    System.currentTimeMillis()
+                        .toInt(),
+                    builder.build()
                 )
         }
     }
+
 
     private fun createNotificationChannel() {
 
@@ -171,54 +244,83 @@ class SignalMessagingService : FirebaseMessagingService() {
             Build.VERSION.SDK_INT <
             Build.VERSION_CODES.O
         ) {
+
             return
         }
+
 
         val manager =
             getSystemService(
                 Context.NOTIFICATION_SERVICE
             ) as NotificationManager
 
-        if (
+
+        /*
+         * Jangan membuat channel baru.
+         * Tetap gunakan channel v2 yang sekarang.
+         */
+        val existing =
             manager.getNotificationChannel(
                 CHANNEL_ID
-            ) != null
-        ) {
+            )
+
+
+        if (existing != null) {
+
             return
         }
+
+
+        val soundUri =
+            android.media.RingtoneManager
+                .getDefaultUri(
+                    android.media.RingtoneManager
+                        .TYPE_NOTIFICATION
+                )
+
+
+        val audioAttributes =
+            AudioAttributes.Builder()
+                .setUsage(
+                    AudioAttributes
+                        .USAGE_NOTIFICATION
+                )
+                .setContentType(
+                    AudioAttributes
+                        .CONTENT_TYPE_SONIFICATION
+                )
+                .build()
+
 
         val channel =
             NotificationChannel(
                 CHANNEL_ID,
-                "Notifikasi Signal",
-                NotificationManager.IMPORTANCE_HIGH
+                "SEBU DOLLAR AI Signal",
+                NotificationManager
+                    .IMPORTANCE_HIGH
             ).apply {
 
                 description =
                     "Notifikasi signal SEBU DOLLAR AI"
 
-                enableVibration(true)
+                enableVibration(
+                    true
+                )
 
                 vibrationPattern =
                     longArrayOf(
                         0,
-                        300,
-                        150,
-                        300
+                        500,
+                        250,
+                        500
                     )
 
                 setSound(
-                    android.provider.Settings
-                        .System
-                        .DEFAULT_NOTIFICATION_URI,
-                    AudioAttributes.Builder()
-                        .setUsage(
-                            AudioAttributes
-                                .USAGE_NOTIFICATION
-                        )
-                        .build()
+                    soundUri,
+                    audioAttributes
                 )
             }
+
 
         manager.createNotificationChannel(
             channel
