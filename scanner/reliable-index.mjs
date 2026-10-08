@@ -2,30 +2,62 @@ import { initializeApp, cert, getApps } from "firebase-admin/app";
 import { getMessaging } from "firebase-admin/messaging";
 import { getFirestore } from "firebase-admin/firestore";
 
+/*
+=========================================================
+SEBU DOLLAR AI — RELIABLE SCANNER
+SETUP 1 / 2 / 3 = M30
+SETUP 4          = M15
+SETUP 5          = M5
+
+ENTRY:
+  50% BODY C2
+
+M30 SL:
+  BUY  = lowest wick C1/C2
+  SELL = highest wick C1/C2
+
+M15/M5 SL:
+  BUY  = lowest wick C1 and candle immediately before C1
+  SELL = highest wick C1 and candle immediately before C1
+
+TP:
+  RR 1:1
+
+C2 MUST BE CLOSED.
+Each timeframe is scanned independently.
+=========================================================
+*/
+
 const CANDLE_API_URL = "https://biquote.io/api/XAUUSD/ohlc";
-
-const TIMEFRAME_MS = 30 * 60 * 1000;
-
 const TOPIC = "sebu_signal_users";
-
 const CANDLE_LIMIT = 80;
 
-/*
-=========================================================
-FIRESTORE
-=========================================================
-*/
+const TF = {
+  M30: {
+    minutes: 30,
+    interval: "30m",
+    stateDocument: "xauusd_m30"
+  },
+
+  M15: {
+    minutes: 15,
+    interval: "15m",
+    stateDocument: "xauusd_m15"
+  },
+
+  M5: {
+    minutes: 5,
+    interval: "5m",
+    stateDocument: "xauusd_m5"
+  }
+};
 
 const STATE_COLLECTION = "signal_scanner_state";
-const STATE_DOCUMENT = "xauusd_m30";
-
 const SENT_COLLECTION = "sent_signals";
 
-/*
-=========================================================
-TIME
-=========================================================
-*/
+/* =======================================================
+   TIME
+======================================================= */
 
 function normalizeTime(value) {
   if (value === null || value === undefined) return NaN;
@@ -53,30 +85,33 @@ function normalizeTime(value) {
     : NaN;
 }
 
-/*
-=========================================================
-CANDLE NORMALIZER
-=========================================================
-*/
+/* =======================================================
+   CANDLE NORMALIZER
+======================================================= */
 
 function normalizeCandles(payload) {
   let bars = [];
 
   if (Array.isArray(payload)) {
     bars = payload;
+
   } else if (Array.isArray(payload?.bars)) {
     bars = payload.bars;
+
   } else if (Array.isArray(payload?.values)) {
     bars = payload.values;
+
   } else if (Array.isArray(payload?.data)) {
     bars = payload.data;
+
   } else if (Array.isArray(payload?.result)) {
     bars = payload.result;
+
   } else if (Array.isArray(payload?.result?.bars)) {
     bars = payload.result.bars;
   }
 
-  const candles = bars
+  const normalized = bars
     .map((c) => ({
       time: normalizeTime(
         c?.openTime ??
@@ -88,11 +123,8 @@ function normalizeCandles(payload) {
       ),
 
       open: Number(c?.open ?? c?.o),
-
       high: Number(c?.high ?? c?.h),
-
       low: Number(c?.low ?? c?.l),
-
       close: Number(c?.close ?? c?.c)
     }))
 
@@ -106,92 +138,91 @@ function normalizeCandles(payload) {
 
     .sort((a, b) => a.time - b.time);
 
-  /*
-  Remove duplicate candle timestamps
-  */
+  const unique = [];
 
-  const result = [];
+  for (const candle of normalized) {
+    const previous = unique[unique.length - 1];
 
-  for (const candle of candles) {
     if (
-      result.length > 0 &&
-      result[result.length - 1].time === candle.time
+      previous &&
+      previous.time === candle.time
     ) {
-      result[result.length - 1] = candle;
+      unique[unique.length - 1] = candle;
     } else {
-      result.push(candle);
+      unique.push(candle);
     }
   }
 
-  return result;
+  return unique;
 }
 
-/*
-=========================================================
-CANDLE TYPES
-=========================================================
-*/
+/* =======================================================
+   CANDLE TYPES
+======================================================= */
 
 function isBullish(c) {
-  return c.close > c.open;
+  return Number(c.close) > Number(c.open);
 }
 
 function isBearish(c) {
-  return c.close < c.open;
+  return Number(c.close) < Number(c.open);
 }
 
-/*
-=========================================================
-BULLISH ENGULFING
-=========================================================
-*/
+/* =======================================================
+   ENGULFING
+======================================================= */
 
-function bullishEngulfing(c1, c2) {
+function isBullishEngulfing(c1, c2) {
+  const open1 = Number(c1.open);
+  const close1 = Number(c1.close);
+  const high1 = Number(c1.high);
+
+  const open2 = Number(c2.open);
+  const close2 = Number(c2.close);
+
   const body1 =
-    Math.abs(c1.close - c1.open);
+    Math.abs(close1 - open1);
 
   const body2 =
-    Math.abs(c2.close - c2.open);
+    Math.abs(close2 - open2);
 
   return (
     isBearish(c1) &&
     isBullish(c2) &&
     body2 > body1 &&
-    c2.open <= c1.close &&
-    c2.close >= c1.open
+    open2 <= close1 &&
+    close2 > high1
   );
 }
 
-/*
-=========================================================
-BEARISH ENGULFING
-=========================================================
-*/
+function isBearishEngulfing(c1, c2) {
+  const open1 = Number(c1.open);
+  const close1 = Number(c1.close);
+  const low1 = Number(c1.low);
 
-function bearishEngulfing(c1, c2) {
+  const open2 = Number(c2.open);
+  const close2 = Number(c2.close);
+
   const body1 =
-    Math.abs(c1.close - c1.open);
+    Math.abs(close1 - open1);
 
   const body2 =
-    Math.abs(c2.close - c2.open);
+    Math.abs(close2 - open2);
 
   return (
     isBullish(c1) &&
     isBearish(c2) &&
     body2 > body1 &&
-    c2.open >= c1.close &&
-    c2.close <= c1.open
+    open2 >= close1 &&
+    close2 < low1
   );
 }
 
-/*
-=========================================================
-SETUP 1
-=========================================================
-*/
+/* =======================================================
+   SETUP 1 — M30
+======================================================= */
 
 function setup1(candles, direction) {
-
   const n = candles.length;
 
   const required =
@@ -206,15 +237,12 @@ function setup1(candles, direction) {
     i >= 0;
     i--
   ) {
-
     const valid =
       required === "bearish"
         ? isBearish(candles[i])
         : isBullish(candles[i]);
 
-    if (!valid) {
-      break;
-    }
+    if (!valid) break;
 
     count++;
   }
@@ -222,67 +250,56 @@ function setup1(candles, direction) {
   return count >= 2;
 }
 
-/*
-=========================================================
-SETUP 2
-RULE 1 OR RULE 2
-=========================================================
-*/
+/* =======================================================
+   SETUP 2 — M30
+   RULE 1 OR RULE 2
+======================================================= */
 
 function setup2(candles, direction) {
-
   const n = candles.length;
 
-  if (n < 6) {
-    return false;
-  }
+  if (n < 6) return false;
 
   const preC1Index = n - 3;
-
   const c1Index = n - 2;
-
   const c2Index = n - 1;
 
-  const preC1 = candles[preC1Index];
+  const preC1 =
+    candles[preC1Index];
 
-  const c1 = candles[c1Index];
+  const c1 =
+    candles[c1Index];
 
-  const c2 = candles[c2Index];
-
-  /*
-  RULE 1
-  */
+  const c2 =
+    candles[c2Index];
 
   let rule1 = false;
 
   if (direction === "SELL") {
-
     rule1 =
       isBullish(preC1) &&
       isBullish(c1) &&
       isBearish(c2) &&
-      c2.open >= c1.close &&
-      c2.close <= c1.open;
+      Number(c2.open) >=
+        Number(c1.close) &&
+      Number(c2.close) <=
+        Number(c1.open);
   }
 
   if (direction === "BUY") {
-
     rule1 =
       isBearish(preC1) &&
       isBearish(c1) &&
       isBullish(c2) &&
-      c2.open <= c1.close &&
-      c2.close >= c1.open;
+      Number(c2.open) <=
+        Number(c1.close) &&
+      Number(c2.close) >=
+        Number(c1.open);
   }
-
-  /*
-  RULE 2
-  */
 
   let rule2 = false;
 
   if (n >= 15) {
-
     const previous12 =
       candles.slice(
         c1Index - 12,
@@ -292,7 +309,6 @@ function setup2(candles, direction) {
     if (previous12.length === 12) {
 
       if (direction === "SELL") {
-
         const previousPeak =
           Math.max(
             ...previous12.map(
@@ -303,12 +319,15 @@ function setup2(candles, direction) {
         rule2 =
           isBearish(preC1) &&
           isBullish(c1) &&
-          Number(c1.high) > previousPeak &&
-          bearishEngulfing(c1, c2);
+          Number(c1.high) >
+            previousPeak &&
+          isBearishEngulfing(
+            c1,
+            c2
+          );
       }
 
       if (direction === "BUY") {
-
         const previousTrough =
           Math.min(
             ...previous12.map(
@@ -319,45 +338,38 @@ function setup2(candles, direction) {
         rule2 =
           isBullish(preC1) &&
           isBearish(c1) &&
-          Number(c1.low) < previousTrough &&
-          bullishEngulfing(c1, c2);
+          Number(c1.low) <
+            previousTrough &&
+          isBullishEngulfing(
+            c1,
+            c2
+          );
       }
     }
   }
 
-  /*
-  RULE 1 OR RULE 2
-  */
-
   return rule1 || rule2;
 }
 
-/*
-=========================================================
-SETUP 3
-=========================================================
-*/
+/* =======================================================
+   SETUP 3 — M30
+======================================================= */
 
 function setup3(candles, direction) {
-
   const n = candles.length;
 
-  if (n < 7) {
-    return false;
-  }
+  if (n < 7) return false;
 
-  const c2 = candles[n - 1];
+  const c2 =
+    candles[n - 1];
 
-  const c1 = candles[n - 2];
+  const c1 =
+    candles[n - 2];
 
-  const p1 = candles[n - 3];
-
-  /*
-  PULLBACK
-  */
+  const p1 =
+    candles[n - 3];
 
   if (direction === "BUY") {
-
     if (
       !isBearish(p1) ||
       !isBearish(c1)
@@ -367,7 +379,6 @@ function setup3(candles, direction) {
   }
 
   if (direction === "SELL") {
-
     if (
       !isBullish(p1) ||
       !isBullish(c1)
@@ -376,16 +387,13 @@ function setup3(candles, direction) {
     }
   }
 
-  /*
-  TREND
-  */
+  const t1 =
+    candles[n - 4];
 
-  const t1 = candles[n - 4];
-
-  const t2 = candles[n - 5];
+  const t2 =
+    candles[n - 5];
 
   if (direction === "BUY") {
-
     if (
       !isBullish(t1) ||
       !isBullish(t2)
@@ -395,7 +403,6 @@ function setup3(candles, direction) {
   }
 
   if (direction === "SELL") {
-
     if (
       !isBearish(t1) ||
       !isBearish(t2)
@@ -404,35 +411,25 @@ function setup3(candles, direction) {
     }
   }
 
-  /*
-  FINAL ENGULFING
-  */
-
-  if (direction === "BUY") {
-    return bullishEngulfing(c1, c2);
-  }
-
-  return bearishEngulfing(c1, c2);
+  return direction === "BUY"
+    ? isBullishEngulfing(c1, c2)
+    : isBearishEngulfing(c1, c2);
 }
 
-/*
-=========================================================
-DETECT MARKET SETUP
-=========================================================
-*/
+/* =======================================================
+   M30 SETUP PRIORITY
+======================================================= */
 
 function detectMarketSetup(
   candles,
   direction
 ) {
-
   if (
     setup3(
       candles,
       direction
     )
   ) {
-
     return {
       number: 3,
       name: "CONTINUATION"
@@ -445,7 +442,6 @@ function detectMarketSetup(
       direction
     )
   ) {
-
     return {
       number: 1,
       name: "REVERSAL BERURUTAN"
@@ -458,7 +454,6 @@ function detectMarketSetup(
       direction
     )
   ) {
-
     return {
       number: 2,
       name: "REVERSAL PULLBACK"
@@ -468,23 +463,41 @@ function detectMarketSetup(
   return null;
 }
 
-/*
-=========================================================
-FINAL SIGNAL ENGINE
+/* =======================================================
+   ENTRY = 50% BODY C2
+======================================================= */
 
-C2 CLOSED
-ENTRY 50% BODY C2
-SL WICK C1/C2
-TP RR 1:1
-=========================================================
-*/
+function entry50Body(c2) {
+  const bodyLow =
+    Math.min(
+      Number(c2.open),
+      Number(c2.close)
+    );
 
-function evaluateSignal(
+  const bodyHigh =
+    Math.max(
+      Number(c2.open),
+      Number(c2.close)
+    );
+
+  return (
+    bodyLow +
+    (bodyHigh - bodyLow) / 2
+  );
+}
+
+/* =======================================================
+   M30 — SETUP 1/2/3
+======================================================= */
+
+function evaluateM30(
   candles,
   now
 ) {
-
-  if (candles.length < 5) {
+  if (
+    !Array.isArray(candles) ||
+    candles.length < 5
+  ) {
     return null;
   }
 
@@ -494,41 +507,37 @@ function evaluateSignal(
   const c1 =
     candles[candles.length - 2];
 
-  /*
-  C2 HARUS SUDAH CLOSED
-  */
+  const tfMs =
+    TF.M30.minutes *
+    60 *
+    1000;
 
   if (
     Number(c2.time) +
-    TIMEFRAME_MS >
+    tfMs >
     now
   ) {
-
     return null;
   }
 
-  const buySignal =
-    bullishEngulfing(
+  const buy =
+    isBullishEngulfing(
       c1,
       c2
     );
 
-  const sellSignal =
-    bearishEngulfing(
+  const sell =
+    isBearishEngulfing(
       c1,
       c2
     );
 
-  if (
-    !buySignal &&
-    !sellSignal
-  ) {
-
+  if (!buy && !sell) {
     return null;
   }
 
   const direction =
-    buySignal
+    buy
       ? "BUY"
       : "SELL";
 
@@ -542,41 +551,21 @@ function evaluateSignal(
     return null;
   }
 
-  /*
-  ENTRY = 50% BODY C2
-  */
-
-  const bodyLow =
-    Math.min(
-      Number(c2.open),
-      Number(c2.close)
-    );
-
-  const bodyHigh =
-    Math.max(
-      Number(c2.open),
-      Number(c2.close)
-    );
-
   const entry =
-    bodyLow +
-    (
-      bodyHigh -
-      bodyLow
-    ) / 2;
+    entry50Body(c2);
 
   /*
-  SL = WICK C1 / C2
+  M30:
+  BUY  = lowest wick C1/C2
+  SELL = highest wick C1/C2
   */
 
   const sl =
     direction === "BUY"
-
       ? Math.min(
           Number(c1.low),
           Number(c2.low)
         )
-
       : Math.max(
           Number(c1.high),
           Number(c2.high)
@@ -592,104 +581,446 @@ function evaluateSignal(
     !Number.isFinite(sl) ||
     !(risk > 0)
   ) {
-
     return null;
   }
 
-  /*
-  TP = RR 1:1
-  */
-
   const tp =
     direction === "BUY"
-
       ? entry + risk
-
       : entry - risk;
 
   return {
-
     type: direction,
-
     entry,
-
     sl,
-
     tp,
-
     riskDistance: risk,
-
     candleTime:
       Number(c2.time),
-
+    candleCloseTime:
+      Number(c2.time) + tfMs,
     setupNumber:
       setup.number,
-
     setupName:
-      setup.name
+      setup.name,
+    timeframe: "M30",
+    timeframeMinutes: 30,
+    trendText:
+      `SETUP ${setup.number} — ${setup.name}`,
+    engulfText:
+      "CONFIRMED"
   };
 }
 
-/*
-=========================================================
-FIREBASE INITIALIZATION
-=========================================================
-*/
+/* =======================================================
+   SETUP 4 — M15
+======================================================= */
 
-function initializeFirebase() {
+function evaluateSetup4M15(
+  candles,
+  now
+) {
+  const c =
+    Array.isArray(candles)
+      ? candles
+          .filter((x) =>
+            x &&
+            [
+              x.time,
+              x.open,
+              x.high,
+              x.low,
+              x.close
+            ].every(
+              (v) =>
+                Number.isFinite(
+                  Number(v)
+                )
+            )
+          )
+          .sort(
+            (a, b) =>
+              Number(a.time) -
+              Number(b.time)
+          )
+      : [];
 
-  const raw =
-    process.env.FIREBASE_SERVICE_ACCOUNT;
-
-  if (!raw) {
-
-    throw new Error(
-      "Secret FIREBASE_SERVICE_ACCOUNT belum ditemukan."
-    );
+  if (c.length < 4) {
+    return null;
   }
 
-  let serviceAccount;
+  const c2 =
+    c[c.length - 1];
 
-  try {
+  const c1 =
+    c[c.length - 2];
 
-    serviceAccount =
-      JSON.parse(raw);
+  const beforeC1 =
+    c[c.length - 3];
 
-  } catch {
+  const beforeBeforeC1 =
+    c[c.length - 4];
 
-    throw new Error(
-      "FIREBASE_SERVICE_ACCOUNT bukan JSON Firebase Service Account yang valid."
-    );
-  }
+  const tfMs =
+    TF.M15.minutes *
+    60 *
+    1000;
+
+  const c2Time =
+    Number(c2.time);
 
   if (
-    getApps().length === 0
+    !Number.isFinite(c2Time) ||
+    c2Time % tfMs !== 0 ||
+    c2Time + tfMs > now
   ) {
-
-    initializeApp({
-      credential:
-        cert(serviceAccount)
-    });
+    return null;
   }
 
-  console.log(
-    "Firebase Admin berhasil diinisialisasi."
-  );
+  const twoBeforeBullish =
+    isBullish(beforeC1) &&
+    isBullish(beforeBeforeC1);
+
+  const twoBeforeBearish =
+    isBearish(beforeC1) &&
+    isBearish(beforeBeforeC1);
+
+  const c1BullishBodyEngulf =
+    isBearish(beforeC1) &&
+    isBullish(c1) &&
+    Number(c1.open) <=
+      Number(beforeC1.close) &&
+    Number(c1.close) >=
+      Number(beforeC1.open) &&
+    Math.abs(
+      Number(c1.close) -
+      Number(c1.open)
+    ) >=
+      Math.abs(
+        Number(beforeC1.close) -
+        Number(beforeC1.open)
+      );
+
+  const c1BearishBodyEngulf =
+    isBullish(beforeC1) &&
+    isBearish(c1) &&
+    Number(c1.open) >=
+      Number(beforeC1.close) &&
+    Number(c1.close) <=
+      Number(beforeC1.open) &&
+    Math.abs(
+      Number(c1.close) -
+      Number(c1.open)
+    ) >=
+      Math.abs(
+        Number(beforeC1.close) -
+        Number(beforeC1.open)
+      );
+
+  const c2BuyBodyBreaksC1High =
+    isBullish(c2) &&
+    Number(c2.open) <=
+      Number(c1.high) &&
+    Number(c2.close) >
+      Number(c1.high);
+
+  const c2SellBodyBreaksC1Low =
+    isBearish(c2) &&
+    Number(c2.open) >=
+      Number(c1.low) &&
+    Number(c2.close) <
+      Number(c1.low);
+
+  const buy =
+    twoBeforeBearish &&
+    c1BullishBodyEngulf &&
+    c2BuyBodyBreaksC1High;
+
+  const sell =
+    twoBeforeBullish &&
+    c1BearishBodyEngulf &&
+    c2SellBodyBreaksC1Low;
+
+  if (!buy && !sell) {
+    return null;
+  }
+
+  const type =
+    buy
+      ? "BUY"
+      : "SELL";
+
+  const entry =
+    entry50Body(c2);
+
+  /*
+  M15:
+  BUY  = lowest wick C1 + candle immediately before C1
+  SELL = highest wick C1 + candle immediately before C1
+  */
+
+  const sl =
+    type === "BUY"
+      ? Math.min(
+          Number(c1.low),
+          Number(beforeC1.low)
+        )
+      : Math.max(
+          Number(c1.high),
+          Number(beforeC1.high)
+        );
+
+  const risk =
+    Math.abs(
+      entry - sl
+    );
+
+  if (
+    !(risk > 0) ||
+    !Number.isFinite(entry) ||
+    !Number.isFinite(sl)
+  ) {
+    return null;
+  }
+
+  const tp =
+    type === "BUY"
+      ? entry + risk
+      : entry - risk;
+
+  return {
+    type,
+    entry,
+    sl,
+    tp,
+    riskDistance: risk,
+    candleTime: c2Time,
+    candleCloseTime:
+      c2Time + tfMs,
+    setupNumber: 4,
+    setupName:
+      "M15 REVERSAL CONFIRMATION",
+    timeframe: "M15",
+    timeframeMinutes: 15,
+    trendText:
+      "SETUP 4 — M15 CONFIRMATION",
+    engulfText:
+      "M15 CONFIRMED"
+  };
 }
 
-/*
-=========================================================
-FETCH BIQUOTE
-=========================================================
-*/
+/* =======================================================
+   SETUP 5 — M5
+======================================================= */
 
-async function fetchCandles() {
+function evaluateSetup5M5(
+  candles,
+  now
+) {
+  const c =
+    Array.isArray(candles)
+      ? candles
+          .filter((x) =>
+            x &&
+            [
+              x.time,
+              x.open,
+              x.high,
+              x.low,
+              x.close
+            ].every(
+              (v) =>
+                Number.isFinite(
+                  Number(v)
+                )
+            )
+          )
+          .sort(
+            (a, b) =>
+              Number(a.time) -
+              Number(b.time)
+          )
+      : [];
+
+  if (c.length < 4) {
+    return null;
+  }
+
+  const c2 =
+    c[c.length - 1];
+
+  const c1 =
+    c[c.length - 2];
+
+  const beforeC1 =
+    c[c.length - 3];
+
+  const beforeBeforeC1 =
+    c[c.length - 4];
+
+  const tfMs =
+    TF.M5.minutes *
+    60 *
+    1000;
+
+  const c2Time =
+    Number(c2.time);
+
+  if (
+    !Number.isFinite(c2Time) ||
+    c2Time % tfMs !== 0 ||
+    c2Time + tfMs > now
+  ) {
+    return null;
+  }
+
+  const twoBeforeBullish =
+    isBullish(beforeC1) &&
+    isBullish(beforeBeforeC1);
+
+  const twoBeforeBearish =
+    isBearish(beforeC1) &&
+    isBearish(beforeBeforeC1);
+
+  const c1BullishBodyEngulf =
+    isBearish(beforeC1) &&
+    isBullish(c1) &&
+    Number(c1.open) <=
+      Number(beforeC1.close) &&
+    Number(c1.close) >=
+      Number(beforeC1.open) &&
+    Math.abs(
+      Number(c1.close) -
+      Number(c1.open)
+    ) >=
+      Math.abs(
+        Number(beforeC1.close) -
+        Number(beforeC1.open)
+      );
+
+  const c1BearishBodyEngulf =
+    isBullish(beforeC1) &&
+    isBearish(c1) &&
+    Number(c1.open) >=
+      Number(beforeC1.close) &&
+    Number(c1.close) <=
+      Number(beforeC1.open) &&
+    Math.abs(
+      Number(c1.close) -
+      Number(c1.open)
+    ) >=
+      Math.abs(
+        Number(beforeC1.close) -
+        Number(beforeC1.open)
+      );
+
+  const c2BuyBodyBreaksC1High =
+    isBullish(c2) &&
+    Number(c2.open) <=
+      Number(c1.high) &&
+    Number(c2.close) >
+      Number(c1.high);
+
+  const c2SellBodyBreaksC1Low =
+    isBearish(c2) &&
+    Number(c2.open) >=
+      Number(c1.low) &&
+    Number(c2.close) <
+      Number(c1.low);
+
+  const buy =
+    twoBeforeBearish &&
+    c1BullishBodyEngulf &&
+    c2BuyBodyBreaksC1High;
+
+  const sell =
+    twoBeforeBullish &&
+    c1BearishBodyEngulf &&
+    c2SellBodyBreaksC1Low;
+
+  if (!buy && !sell) {
+    return null;
+  }
+
+  const type =
+    buy
+      ? "BUY"
+      : "SELL";
+
+  const entry =
+    entry50Body(c2);
+
+  /*
+  M5:
+  BUY  = lowest wick C1 + candle immediately before C1
+  SELL = highest wick C1 + candle immediately before C1
+  */
+
+  const sl =
+    type === "BUY"
+      ? Math.min(
+          Number(c1.low),
+          Number(beforeC1.low)
+        )
+      : Math.max(
+          Number(c1.high),
+          Number(beforeC1.high)
+        );
+
+  const risk =
+    Math.abs(
+      entry - sl
+    );
+
+  if (
+    !(risk > 0) ||
+    !Number.isFinite(entry) ||
+    !Number.isFinite(sl)
+  ) {
+    return null;
+  }
+
+  const tp =
+    type === "BUY"
+      ? entry + risk
+      : entry - risk;
+
+  return {
+    type,
+    entry,
+    sl,
+    tp,
+    riskDistance: risk,
+    candleTime: c2Time,
+    candleCloseTime:
+      c2Time + tfMs,
+    setupNumber: 5,
+    setupName:
+      "M5 REVERSAL CONFIRMATION",
+    timeframe: "M5",
+    timeframeMinutes: 5,
+    trendText:
+      "SETUP 5 — M5 CONFIRMATION",
+    engulfText:
+      "M5 CONFIRMED"
+  };
+}
+
+/* =======================================================
+   FETCH BIQUOTE
+======================================================= */
+
+async function fetchCandles(
+  timeframe
+) {
+  const config =
+    TF[timeframe];
 
   const url =
-    `${CANDLE_API_URL}?interval=30m&limit=${CANDLE_LIMIT}`;
+    `${CANDLE_API_URL}?interval=${config.interval}&limit=${CANDLE_LIMIT}`;
 
   console.log(
-    `Mengambil candle: ${url}`
+    `[${timeframe}] Mengambil candle: ${url}`
   );
 
   const response =
@@ -711,26 +1042,22 @@ async function fetchCandles() {
     );
 
   if (!response.ok) {
-
     const errorText =
       await response.text();
 
     throw new Error(
-      `BiQuote HTTP ${response.status}: ${errorText.slice(0,300)}`
+      `[${timeframe}] BiQuote HTTP ${response.status}: ${errorText.slice(0, 300)}`
     );
   }
 
   let payload;
 
   try {
-
     payload =
       await response.json();
-
   } catch {
-
     throw new Error(
-      "Response BiQuote bukan JSON yang valid."
+      `[${timeframe}] Response BiQuote bukan JSON yang valid.`
     );
   }
 
@@ -740,23 +1067,101 @@ async function fetchCandles() {
     );
 
   if (!candles.length) {
-
     throw new Error(
-      "BiQuote tidak mengembalikan candle XAUUSD yang valid."
+      `[${timeframe}] BiQuote tidak mengembalikan candle XAUUSD yang valid.`
     );
   }
 
   return candles;
 }
 
-/*
-=========================================================
-FIRESTORE STATE
-=========================================================
-*/
+/* =======================================================
+   CLOSED CANDLES
+======================================================= */
 
-async function getScannerState() {
+function getClosedCandles(
+  candles,
+  timeframe,
+  now
+) {
+  const tfMs =
+    TF[timeframe].minutes *
+    60 *
+    1000;
 
+  return candles
+    .filter((c) => {
+      const t =
+        Number(c.time);
+
+      if (!Number.isFinite(t)) {
+        return false;
+      }
+
+      if (
+        timeframe !== "M30" &&
+        t % tfMs !== 0
+      ) {
+        return false;
+      }
+
+      return (
+        t + tfMs <= now
+      );
+    })
+    .sort(
+      (a, b) =>
+        Number(a.time) -
+        Number(b.time)
+    );
+}
+
+/* =======================================================
+   FIREBASE
+======================================================= */
+
+function initializeFirebase() {
+  const raw =
+    process.env.FIREBASE_SERVICE_ACCOUNT;
+
+  if (!raw) {
+    throw new Error(
+      "Secret FIREBASE_SERVICE_ACCOUNT belum ditemukan."
+    );
+  }
+
+  let serviceAccount;
+
+  try {
+    serviceAccount =
+      JSON.parse(raw);
+  } catch {
+    throw new Error(
+      "FIREBASE_SERVICE_ACCOUNT bukan JSON Firebase Service Account yang valid."
+    );
+  }
+
+  if (
+    getApps().length === 0
+  ) {
+    initializeApp({
+      credential:
+        cert(serviceAccount)
+    });
+  }
+
+  console.log(
+    "Firebase Admin berhasil diinisialisasi."
+  );
+}
+
+/* =======================================================
+   FIRESTORE STATE
+======================================================= */
+
+async function getScannerState(
+  timeframe
+) {
   const db =
     getFirestore();
 
@@ -766,7 +1171,8 @@ async function getScannerState() {
         STATE_COLLECTION
       )
       .doc(
-        STATE_DOCUMENT
+        TF[timeframe]
+          .stateDocument
       )
       .get();
 
@@ -779,16 +1185,10 @@ async function getScannerState() {
   );
 }
 
-/*
-=========================================================
-SAVE CHECKPOINT
-=========================================================
-*/
-
 async function saveScannerState(
+  timeframe,
   candleTime
 ) {
-
   const db =
     getFirestore();
 
@@ -797,7 +1197,8 @@ async function saveScannerState(
       STATE_COLLECTION
     )
     .doc(
-      STATE_DOCUMENT
+      TF[timeframe]
+        .stateDocument
     )
     .set(
       {
@@ -813,44 +1214,43 @@ async function saveScannerState(
     );
 }
 
-/*
-=========================================================
-CLAIM SIGNAL
+/* =======================================================
+   CLAIM SIGNAL
+======================================================= */
 
-Signal hanya boleh dikirim sekali.
-
-Transaction mencegah dua scanner
-mengirim signal yang sama.
-=========================================================
-*/
+function signalKey(
+  signal
+) {
+  return (
+    `${signal.timeframe}_${signal.candleTime}_${signal.type}`
+  );
+}
 
 async function claimSignal(
   signal
 ) {
-
   const db =
     getFirestore();
-
-  const key =
-    `${signal.candleTime}_${signal.type}`;
 
   const reference =
     db
       .collection(
         SENT_COLLECTION
       )
-      .doc(key);
+      .doc(
+        signalKey(signal)
+      );
 
   return db.runTransaction(
     async (transaction) => {
-
       const snapshot =
         await transaction.get(
           reference
         );
 
-      if (snapshot.exists) {
-
+      if (
+        snapshot.exists
+      ) {
         return false;
       }
 
@@ -859,6 +1259,9 @@ async function claimSignal(
         {
           type:
             signal.type,
+
+          timeframe:
+            signal.timeframe,
 
           setupNumber:
             signal.setupNumber,
@@ -878,6 +1281,9 @@ async function claimSignal(
           candleTime:
             signal.candleTime,
 
+          candleCloseTime:
+            signal.candleCloseTime,
+
           createdAt:
             new Date().toISOString(),
 
@@ -891,57 +1297,36 @@ async function claimSignal(
   );
 }
 
-/*
-=========================================================
-RELEASE CLAIM
-
-Jika FCM gagal,
-signal tidak dianggap berhasil.
-
-Run berikutnya akan mencoba lagi.
-=========================================================
-*/
-
 async function releaseSignalClaim(
   signal
 ) {
-
   const db =
     getFirestore();
-
-  const key =
-    `${signal.candleTime}_${signal.type}`;
 
   await db
     .collection(
       SENT_COLLECTION
     )
-    .doc(key)
+    .doc(
+      signalKey(signal)
+    )
     .delete();
 }
-
-/*
-=========================================================
-MARK SIGNAL SENT
-=========================================================
-*/
 
 async function markSignalSent(
   signal,
   messageId
 ) {
-
   const db =
     getFirestore();
-
-  const key =
-    `${signal.candleTime}_${signal.type}`;
 
   await db
     .collection(
       SENT_COLLECTION
     )
-    .doc(key)
+    .doc(
+      signalKey(signal)
+    )
     .update(
       {
         status:
@@ -956,66 +1341,54 @@ async function markSignalSent(
     );
 }
 
-/*
-=========================================================
-FORMAT PRICE
-=========================================================
-*/
+/* =======================================================
+   FORMAT
+======================================================= */
 
 function formatPrice(
   value
 ) {
-
   const number =
     Number(value);
 
   if (
     !Number.isFinite(number)
   ) {
-
     return "0.00";
   }
 
   return number.toFixed(2);
 }
 
-/*
-=========================================================
-SEND FCM
-=========================================================
-*/
+/* =======================================================
+   SEND FCM
+======================================================= */
 
 async function sendSignal(
   signal
 ) {
-
   const title =
     `SEBU DOLLAR AI — ${signal.type} SAYANG`;
 
   const body =
     `SETUP ${signal.setupNumber} — ${signal.setupName} | ` +
-    `XAUUSD M30 | ` +
+    `XAUUSD ${signal.timeframe} | ` +
     `Entry: ${formatPrice(signal.entry)} | ` +
     `SL: ${formatPrice(signal.sl)} | ` +
     `TP: ${formatPrice(signal.tp)} | ` +
     `RR 1:1`;
 
   const message = {
-
     topic:
       TOPIC,
 
     notification: {
-
       title,
-
       body
     },
 
     data: {
-
       title,
-
       body,
 
       type:
@@ -1025,7 +1398,7 @@ async function sendSignal(
         "XAUUSD",
 
       timeframe:
-        "M30",
+        String(signal.timeframe),
 
       entry:
         formatPrice(
@@ -1055,11 +1428,15 @@ async function sendSignal(
       candleTime:
         String(
           signal.candleTime
+        ),
+
+      candleCloseTime:
+        String(
+          signal.candleCloseTime
         )
     },
 
     android: {
-
       priority:
         "high",
 
@@ -1067,7 +1444,6 @@ async function sendSignal(
         60 * 1000,
 
       notification: {
-
         channelId:
           "sebu_signal_channel_v2",
 
@@ -1092,6 +1468,7 @@ async function sendSignal(
   );
 
   console.log(
+    `${signal.timeframe} | ` +
     `${signal.type} | ` +
     `Setup ${signal.setupNumber} | ` +
     `Entry ${formatPrice(signal.entry)} | ` +
@@ -1105,127 +1482,15 @@ async function sendSignal(
   );
 }
 
-/*
-=========================================================
-MAIN SCANNER
-=========================================================
-*/
+/* =======================================================
+   FIND M30 SIGNALS
+======================================================= */
 
-async function main() {
-
-  console.log(
-    "========================================"
-  );
-
-  console.log(
-    "SEBU DOLLAR AI"
-  );
-
-  console.log(
-    "RELIABLE M30 SIGNAL SCANNER"
-  );
-
-  console.log(
-    "========================================"
-  );
-
-  const now =
-    Date.now();
-
-  /*
-  FIREBASE
-  */
-
-  initializeFirebase();
-
-  /*
-  BIQUOTE
-  */
-
-  const allCandles =
-    await fetchCandles();
-
-  /*
-  ONLY CLOSED M30 CANDLES
-  */
-
-  const closedCandles =
-    allCandles.filter(
-      (candle) =>
-        Number(candle.time) +
-        TIMEFRAME_MS <=
-        now
-    );
-
-  console.log(
-    `Total candle: ${allCandles.length}`
-  );
-
-  console.log(
-    `Candle CLOSED: ${closedCandles.length}`
-  );
-
-  if (
-    closedCandles.length < 5
-  ) {
-
-    throw new Error(
-      "Candle M30 closed belum cukup."
-    );
-  }
-
-  /*
-  FIRESTORE STATE
-  */
-
-  const state =
-    await getScannerState();
-
-  const previous =
-    Number(
-      state.lastProcessedCandleTime
-    ) || 0;
-
-  const newest =
-    closedCandles[
-      closedCandles.length - 1
-    ].time;
-
-  /*
-  FIRST RUN
-
-  Jangan mengirim signal lama.
-  Hanya membuat baseline.
-  */
-
-  if (!previous) {
-
-    await saveScannerState(
-      newest
-    );
-
-    console.log(
-      `Baseline dibuat: ${new Date(newest).toISOString()}`
-    );
-
-    console.log(
-      "Tidak mengirim signal historis."
-    );
-
-    return;
-  }
-
-  /*
-  =======================================================
-  CATCH-UP SCANNER
-
-  Bukan hanya candle terakhir.
-
-  Semua candle closed yang lebih baru
-  dari checkpoint akan diperiksa.
-  =======================================================
-  */
-
+function findM30Signals(
+  closedCandles,
+  previous,
+  now
+) {
   const signals = [];
 
   for (
@@ -1233,16 +1498,15 @@ async function main() {
     i < closedCandles.length;
     i++
   ) {
-
-    const currentCandles =
+    const current =
       closedCandles.slice(
         0,
         i + 1
       );
 
     const candidate =
-      evaluateSignal(
-        currentCandles,
+      evaluateM30(
+        current,
         now
       );
 
@@ -1251,28 +1515,117 @@ async function main() {
       candidate.candleTime >
         previous
     ) {
-
       signals.push(
         candidate
       );
     }
   }
 
-  /*
-  REMOVE DUPLICATE CANDIDATE
-  */
+  return signals;
+}
 
-  const uniqueSignals = [];
+/* =======================================================
+   FIND M15 SIGNALS
+======================================================= */
 
+function findM15Signals(
+  closedCandles,
+  previous,
+  now
+) {
+  const signals = [];
+
+  for (
+    let i = 3;
+    i < closedCandles.length;
+    i++
+  ) {
+    const current =
+      closedCandles.slice(
+        0,
+        i + 1
+      );
+
+    const candidate =
+      evaluateSetup4M15(
+        current,
+        now
+      );
+
+    if (
+      candidate &&
+      candidate.candleTime >
+        previous
+    ) {
+      signals.push(
+        candidate
+      );
+    }
+  }
+
+  return signals;
+}
+
+/* =======================================================
+   FIND M5 SIGNALS
+======================================================= */
+
+function findM5Signals(
+  closedCandles,
+  previous,
+  now
+) {
+  const signals = [];
+
+  for (
+    let i = 3;
+    i < closedCandles.length;
+    i++
+  ) {
+    const current =
+      closedCandles.slice(
+        0,
+        i + 1
+      );
+
+    const candidate =
+      evaluateSetup5M5(
+        current,
+        now
+      );
+
+    if (
+      candidate &&
+      candidate.candleTime >
+        previous
+    ) {
+      signals.push(
+        candidate
+      );
+    }
+  }
+
+  return signals;
+}
+
+/* =======================================================
+   UNIQUE SIGNALS
+======================================================= */
+
+function uniqueSignals(
+  signals
+) {
   const seen =
     new Set();
+
+  const result =
+    [];
 
   for (
     const signal of signals
   ) {
-
     const key =
-      `${signal.candleTime}-${signal.type}`;
+      signalKey(signal);
 
     if (
       seen.has(key)
@@ -1282,68 +1635,179 @@ async function main() {
 
     seen.add(key);
 
-    uniqueSignals.push(
+    result.push(
       signal
     );
   }
 
+  return result.sort(
+    (a, b) =>
+      Number(a.candleTime) -
+      Number(b.candleTime)
+  );
+}
+
+/* =======================================================
+   SCAN ONE TIMEFRAME
+======================================================= */
+
+async function scanTimeframe(
+  timeframe,
+  now
+) {
+  console.log("");
+
   console.log(
-    `Candidate signal ditemukan: ${uniqueSignals.length}`
+    "========================================"
   );
 
+  console.log(
+    `SCAN ${timeframe}`
+  );
+
+  console.log(
+    "========================================"
+  );
+
+  const allCandles =
+    await fetchCandles(
+      timeframe
+    );
+
+  const closedCandles =
+    getClosedCandles(
+      allCandles,
+      timeframe,
+      now
+    );
+
+  console.log(
+    `[${timeframe}] Total candle: ${allCandles.length}`
+  );
+
+  console.log(
+    `[${timeframe}] Candle CLOSED: ${closedCandles.length}`
+  );
+
+  const minimum =
+    timeframe === "M30"
+      ? 5
+      : 4;
+
+  if (
+    closedCandles.length <
+    minimum
+  ) {
+    console.log(
+      `[${timeframe}] Candle closed belum cukup.`
+    );
+
+    return;
+  }
+
+  const state =
+    await getScannerState(
+      timeframe
+    );
+
+  const previous =
+    Number(
+      state.lastProcessedCandleTime
+    ) || 0;
+
+  const newest =
+    Number(
+      closedCandles[
+        closedCandles.length - 1
+      ].time
+    );
+
   /*
-  =======================================================
-  SEND EVERY NEW SIGNAL
-  =======================================================
+  FIRST RUN:
+  Baseline only.
   */
 
-  for (
-    const signal of uniqueSignals
+  if (!previous) {
+    await saveScannerState(
+      timeframe,
+      newest
+    );
+
+    console.log(
+      `[${timeframe}] Baseline dibuat: ${new Date(newest).toISOString()}`
+    );
+
+    return;
+  }
+
+  let signals = [];
+
+  if (
+    timeframe === "M30"
   ) {
+    signals =
+      findM30Signals(
+        closedCandles,
+        previous,
+        now
+      );
+  }
 
-    /*
-    CLAIM FIRST
+  if (
+    timeframe === "M15"
+  ) {
+    signals =
+      findM15Signals(
+        closedCandles,
+        previous,
+        now
+      );
+  }
 
-    Hanya satu runner yang boleh
-    mengirim signal ini.
-    */
+  if (
+    timeframe === "M5"
+  ) {
+    signals =
+      findM5Signals(
+        closedCandles,
+        previous,
+        now
+      );
+  }
 
+  signals =
+    uniqueSignals(
+      signals
+    );
+
+  console.log(
+    `[${timeframe}] Candidate signal: ${signals.length}`
+  );
+
+  for (
+    const signal of signals
+  ) {
     const claimed =
       await claimSignal(
         signal
       );
 
     if (!claimed) {
-
       console.log(
-        `Signal sudah pernah diproses: ` +
-        `${signal.candleTime}-${signal.type}`
+        `[${timeframe}] Signal sudah diproses: ${signalKey(signal)}`
       );
 
       continue;
     }
 
     try {
-
-      /*
-      FCM HARUS BERHASIL
-      */
-
       await sendSignal(
         signal
       );
 
     } catch (error) {
-
-      /*
-      FCM GAGAL
-
-      Hapus claim supaya run berikutnya
-      dapat mencoba kembali.
-      */
-
       console.error(
-        "FCM gagal. Signal akan dicoba kembali."
+        `[${timeframe}] FCM gagal. Claim dilepas agar bisa dicoba lagi.`
       );
 
       await releaseSignalClaim(
@@ -1354,21 +1818,64 @@ async function main() {
     }
   }
 
-  /*
-  =======================================================
-  CHECKPOINT
-
-  Baru maju setelah seluruh candidate
-  selesai diproses.
-  =======================================================
-  */
-
   await saveScannerState(
+    timeframe,
     newest
   );
 
   console.log(
-    `Checkpoint tersimpan: ${new Date(newest).toISOString()}`
+    `[${timeframe}] Checkpoint: ${new Date(newest).toISOString()}`
+  );
+}
+
+/* =======================================================
+   MAIN
+======================================================= */
+
+async function main() {
+  console.log(
+    "========================================"
+  );
+
+  console.log(
+    "SEBU DOLLAR AI"
+  );
+
+  console.log(
+    "RELIABLE SCANNER — SETUP 1/2/3/4/5"
+  );
+
+  console.log(
+    "M30 + M15 + M5"
+  );
+
+  console.log(
+    "========================================"
+  );
+
+  initializeFirebase();
+
+  const now =
+    Date.now();
+
+  /*
+  M30, M15 and M5
+  are independent.
+  */
+
+  await scanTimeframe(
+    "M30",
+    now
+  );
+
+  await scanTimeframe(
+    "M15",
+    now
+  );
+
+  await scanTimeframe(
+    "M5",
+    now
   );
 
   console.log(
@@ -1376,7 +1883,7 @@ async function main() {
   );
 
   console.log(
-    "RELIABLE SCANNER SELESAI"
+    "RELIABLE SCANNER SETUP 1/2/3/4/5 SELESAI"
   );
 
   console.log(
@@ -1384,16 +1891,13 @@ async function main() {
   );
 }
 
-/*
-=========================================================
-ERROR HANDLER
-=========================================================
-*/
+/* =======================================================
+   ERROR HANDLER
+======================================================= */
 
 main()
 
   .then(() => {
-
     console.log(
       "Scanner selesai tanpa error."
     );
@@ -1402,7 +1906,6 @@ main()
   })
 
   .catch((error) => {
-
     console.error(
       "========================================"
     );
