@@ -33,7 +33,27 @@ class SignalMessagingService : FirebaseMessagingService() {
             ?: message.notification?.body
             ?: "Signal baru diterima"
 
-        showNotification(title, body)
+        /*
+         * KIRIM SIGNAL SCANNER KE MAIN ACTIVITY
+         *
+         * Tidak mengubah logika scanner.
+         * Tidak menghitung ulang Entry / SL / TP.
+         * Data yang dikirim adalah data asli dari reliable scanner.
+         */
+        if (message.data.isNotEmpty()) {
+            MainActivity.receiveNativeSignal(
+                message.data
+            )
+        }
+
+        /*
+         * NOTIFIKASI TETAP SAMA
+         */
+        showNotification(
+            title,
+            body,
+            message.data
+        )
     }
 
     override fun onNewToken(token: String) {
@@ -46,11 +66,13 @@ class SignalMessagingService : FirebaseMessagingService() {
 
     private fun showNotification(
         title: String,
-        body: String
+        body: String,
+        data: Map<String, String> = emptyMap()
     ) {
 
         if (
-            Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            Build.VERSION.SDK_INT >=
+            Build.VERSION_CODES.TIRAMISU &&
             ContextCompat.checkSelfPermission(
                 this,
                 Manifest.permission.POST_NOTIFICATIONS
@@ -65,9 +87,21 @@ class SignalMessagingService : FirebaseMessagingService() {
             this,
             MainActivity::class.java
         ).apply {
+
             flags =
                 Intent.FLAG_ACTIVITY_NEW_TASK or
-                Intent.FLAG_ACTIVITY_CLEAR_TOP
+                Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                Intent.FLAG_ACTIVITY_SINGLE_TOP
+
+            /*
+             * Simpan seluruh data scanner ke Intent.
+             *
+             * Ini penting ketika aplikasi berada
+             * di background / notification ditekan.
+             */
+            for ((key, value) in data) {
+                putExtra(key, value)
+            }
         }
 
         val pendingIntent =
