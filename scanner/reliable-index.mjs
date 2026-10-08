@@ -554,12 +554,6 @@ function evaluateM30(
   const entry =
     entry50Body(c2);
 
-  /*
-  M30:
-  BUY  = lowest wick C1/C2
-  SELL = highest wick C1/C2
-  */
-
   const sl =
     direction === "BUY"
       ? Math.min(
@@ -613,7 +607,7 @@ function evaluateM30(
 }
 
 /* =======================================================
-   SETUP 4 — M15
+   SETUP 4 — M15 — ATURAN BARU
 ======================================================= */
 
 function evaluateSetup4M15(
@@ -677,45 +671,38 @@ function evaluateSetup4M15(
     return null;
   }
 
-  const twoBeforeBullish =
-    isBullish(beforeC1) &&
-    isBullish(beforeBeforeC1);
+  /*
+  BUY:
+  - Minimal 2 candle bearish sebelum C1
+  - C1 bullish menembus HIGH/WICK beforeC1
+  - Body + CLOSE C1 di atas HIGH beforeC1
+  - C2 bullish menembus HIGH/WICK C1
+  - Body + CLOSE C2 di atas HIGH C1
+
+  SELL = kebalikannya.
+  */
 
   const twoBeforeBearish =
     isBearish(beforeC1) &&
     isBearish(beforeBeforeC1);
 
-  const c1BullishBodyEngulf =
-    isBearish(beforeC1) &&
+  const twoBeforeBullish =
+    isBullish(beforeC1) &&
+    isBullish(beforeBeforeC1);
+
+  const c1BuyBreaksPreviousHigh =
     isBullish(c1) &&
     Number(c1.open) <=
-      Number(beforeC1.close) &&
-    Number(c1.close) >=
-      Number(beforeC1.open) &&
-    Math.abs(
-      Number(c1.close) -
-      Number(c1.open)
-    ) >=
-      Math.abs(
-        Number(beforeC1.close) -
-        Number(beforeC1.open)
-      );
+      Number(beforeC1.high) &&
+    Number(c1.close) >
+      Number(beforeC1.high);
 
-  const c1BearishBodyEngulf =
-    isBullish(beforeC1) &&
+  const c1SellBreaksPreviousLow =
     isBearish(c1) &&
     Number(c1.open) >=
-      Number(beforeC1.close) &&
-    Number(c1.close) <=
-      Number(beforeC1.open) &&
-    Math.abs(
-      Number(c1.close) -
-      Number(c1.open)
-    ) >=
-      Math.abs(
-        Number(beforeC1.close) -
-        Number(beforeC1.open)
-      );
+      Number(beforeC1.low) &&
+    Number(c1.close) <
+      Number(beforeC1.low);
 
   const c2BuyBodyBreaksC1High =
     isBullish(c2) &&
@@ -733,12 +720,12 @@ function evaluateSetup4M15(
 
   const buy =
     twoBeforeBearish &&
-    c1BullishBodyEngulf &&
+    c1BuyBreaksPreviousHigh &&
     c2BuyBodyBreaksC1High;
 
   const sell =
     twoBeforeBullish &&
-    c1BearishBodyEngulf &&
+    c1SellBreaksPreviousLow &&
     c2SellBodyBreaksC1Low;
 
   if (!buy && !sell) {
@@ -752,12 +739,6 @@ function evaluateSetup4M15(
 
   const entry =
     entry50Body(c2);
-
-  /*
-  M15:
-  BUY  = lowest wick C1 + candle immediately before C1
-  SELL = highest wick C1 + candle immediately before C1
-  */
 
   const sl =
     type === "BUY"
@@ -810,7 +791,7 @@ function evaluateSetup4M15(
 }
 
 /* =======================================================
-   SETUP 5 — M5
+   SETUP 5 — M5 — ATURAN BARU
 ======================================================= */
 
 function evaluateSetup5M5(
@@ -874,45 +855,38 @@ function evaluateSetup5M5(
     return null;
   }
 
-  const twoBeforeBullish =
-    isBullish(beforeC1) &&
-    isBullish(beforeBeforeC1);
+  /*
+  BUY:
+  - Minimal 2 candle bearish sebelum C1
+  - C1 bullish menembus HIGH/WICK beforeC1
+  - Body + CLOSE C1 di atas HIGH beforeC1
+  - C2 bullish menembus HIGH/WICK C1
+  - Body + CLOSE C2 di atas HIGH C1
+
+  SELL = kebalikannya.
+  */
 
   const twoBeforeBearish =
     isBearish(beforeC1) &&
     isBearish(beforeBeforeC1);
 
-  const c1BullishBodyEngulf =
-    isBearish(beforeC1) &&
+  const twoBeforeBullish =
+    isBullish(beforeC1) &&
+    isBullish(beforeBeforeC1);
+
+  const c1BuyBreaksPreviousHigh =
     isBullish(c1) &&
     Number(c1.open) <=
-      Number(beforeC1.close) &&
-    Number(c1.close) >=
-      Number(beforeC1.open) &&
-    Math.abs(
-      Number(c1.close) -
-      Number(c1.open)
-    ) >=
-      Math.abs(
-        Number(beforeC1.close) -
-        Number(beforeC1.open)
-      );
+      Number(beforeC1.high) &&
+    Number(c1.close) >
+      Number(beforeC1.high);
 
-  const c1BearishBodyEngulf =
-    isBullish(beforeC1) &&
+  const c1SellBreaksPreviousLow =
     isBearish(c1) &&
     Number(c1.open) >=
-      Number(beforeC1.close) &&
-    Number(c1.close) <=
-      Number(beforeC1.open) &&
-    Math.abs(
-      Number(c1.close) -
-      Number(c1.open)
-    ) >=
-      Math.abs(
-        Number(beforeC1.close) -
-        Number(beforeC1.open)
-      );
+      Number(beforeC1.low) &&
+    Number(c1.close) <
+      Number(beforeC1.low);
 
   const c2BuyBodyBreaksC1High =
     isBullish(c2) &&
@@ -930,12 +904,12 @@ function evaluateSetup5M5(
 
   const buy =
     twoBeforeBearish &&
-    c1BullishBodyEngulf &&
+    c1BuyBreaksPreviousHigh &&
     c2BuyBodyBreaksC1High;
 
   const sell =
     twoBeforeBullish &&
-    c1BearishBodyEngulf &&
+    c1SellBreaksPreviousLow &&
     c2SellBodyBreaksC1Low;
 
   if (!buy && !sell) {
@@ -949,12 +923,6 @@ function evaluateSetup5M5(
 
   const entry =
     entry50Body(c2);
-
-  /*
-  M5:
-  BUY  = lowest wick C1 + candle immediately before C1
-  SELL = highest wick C1 + candle immediately before C1
-  */
 
   const sl =
     type === "BUY"
@@ -1857,11 +1825,6 @@ async function main() {
 
   const now =
     Date.now();
-
-  /*
-  M30, M15 and M5
-  are independent.
-  */
 
   await scanTimeframe(
     "M30",
