@@ -782,135 +782,108 @@ class MainActivity : AppCompatActivity() {
      * MainActivity sedang hidup.
      */
     private fun receiveSignalOnUi(
-        data: Map<String, String>
+        data: Map<String, String>,
+        fromQueue: Boolean = false
     ) {
 
         runOnUiThread {
 
             try {
 
-                if (
-                    !::webView.isInitialized
-                ) {
-
-                    enqueueSignal(
-                        data
-                    )
-
+                if (!::webView.isInitialized) {
+                    if (!fromQueue) enqueueSignal(data)
                     return@runOnUiThread
                 }
 
-
-                val json =
-                    JSONObject()
-
+                val json = JSONObject()
                 for ((key, value) in data) {
-
-                    json.put(
-                        key,
-                        value
-                    )
+                    json.put(key, value)
                 }
 
-
                 /*
-                 * Jangan hitung ulang:
-                 *
-                 * Entry
-                 * SL
-                 * TP
-                 *
-                 * semuanya berasal dari
-                 * reliable scanner.
+                 * Jangan hapus signal dari antrean sebelum fungsi
+                 * penerima di index.html tersedia dan dipanggil.
+                 * Entry, SL, dan TP tetap menggunakan payload scanner.
                  */
-                val jsArgument =
-                    JSONObject.quote(
-                        json.toString()
-                    )
-
+                val jsArgument = JSONObject.quote(json.toString())
 
                 webView.evaluateJavascript(
                     """
-                    if (typeof window.receiveNativeSignal === 'function') {
-                        window.receiveNativeSignal($jsArgument);
+                    (function() {
+                      if (typeof window.receiveNativeSignal !== 'function') {
+                        return 'NOT_READY';
+                      }
+                      window.receiveNativeSignal($jsArgument);
+                      return 'DELIVERED';
+                    })();
+                    """.trimIndent()
+                ) { result ->
+                    if (result == "\"DELIVERED\"") {
+                        if (fromQueue) removeQueuedSignal(data)
+                    } else if (!fromQueue) {
+                        enqueueSignal(data)
                     }
-                    """.trimIndent(),
-                    null
-                )
+                }
 
             } catch (e: Exception) {
-
                 e.printStackTrace()
-
-                enqueueSignal(
-                    data
-                )
+                if (!fromQueue) enqueueSignal(data)
             }
         }
     }
 
 
     /*
-     * Kirim seluruh signal yang masuk ketika
-     * WebView belum siap.
+     * Hapus hanya signal yang sudah dikirim ke fungsi penerima
+     * JavaScript; jangan pernah mengosongkan antrean sekaligus.
      */
-    private fun flushPendingSignals() {
-
+    private fun removeQueuedSignal(
+        data: Map<String, String>
+    ) {
         try {
-
-            val prefs =
-                getSharedPreferences(
-                    PREFS,
-                    MODE_PRIVATE
-                )
-
-            val raw =
-                prefs.getString(
-                    QUEUE_KEY,
-                    "[]"
-                ) ?: "[]"
-
-            val array =
-                JSONArray(raw)
-
-            if (array.length() == 0) {
-                return
-            }
-
+            val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
+            val array = JSONArray(
+                prefs.getString(QUEUE_KEY, "[]") ?: "[]"
+            )
+            val target = JSONObject()
+            for ((key, value) in data) target.put(key, value)
+            val targetKey = signalKey(target)
+            val remaining = JSONArray()
 
             for (i in 0 until array.length()) {
-
-                val obj =
-                    array.optJSONObject(i)
-                        ?: continue
-
-                val map =
-                    mutableMapOf<String, String>()
-
-                val keys =
-                    obj.keys()
-
-                while (keys.hasNext()) {
-
-                    val key =
-                        keys.next()
-
-                    map[key] =
-                        obj.optString(key)
-                }
-
-                receiveSignalOnUi(
-                    map
-                )
+                val item = array.optJSONObject(i) ?: continue
+                if (signalKey(item) != targetKey) remaining.put(item)
             }
 
-
-            prefs.edit()
-                .remove(QUEUE_KEY)
-                .apply()
-
+            prefs.edit().putString(QUEUE_KEY, remaining.toString()).apply()
         } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
 
+
+    /*
+     * Kirim signal tertunda setelah halaman selesai dimuat.
+     * Setiap item tetap berada di antrean sampai JavaScript
+     * mengonfirmasi penerimaan.
+     */
+    private fun flushPendingSignals() {
+        try {
+            val raw = getSharedPreferences(PREFS, MODE_PRIVATE)
+                .getString(QUEUE_KEY, "[]") ?: "[]"
+            val array = JSONArray(raw)
+
+            for (i in 0 until array.length()) {
+                val obj = array.optJSONObject(i) ?: continue
+                val map = mutableMapOf<String, String>()
+                val keys = obj.keys()
+                while (keys.hasNext()) {
+                    val key = keys.next()
+                    map[key] = obj.optString(key)
+                }
+                receiveSignalOnUi(map, true)
+            }
+        } catch (e: Exception) {
             e.printStackTrace()
         }
     }
