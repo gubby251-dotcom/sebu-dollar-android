@@ -1956,7 +1956,7 @@ body.innerHTML+=`
 <tr>
 
 <td>
-${s.time}<br><small style="color:var(--muted)">${(Number(s.timeframeMinutes)||30)+"m"} • S${Number(s.setupNumber)||"?"}</small>
+${s.time}
 </td>
 
 <td class="${isBuy?"bull":"sell"}">
@@ -2017,21 +2017,14 @@ total>0
    AI TRADE SETUP must hold the latest PENDING signal.
    It is cleared only after that signal becomes HIT TP or HIT SL.
 */
-function getSignalKey(s){
-  return String(s?.setupNumber||0)+"_"+String(s?.timeframeMinutes||SCANNER_TIMEFRAME_MINUTES)+"_"+String(s?.type||"")+"_"+String(s?.candleTime||"");
-}
-
 function getActivePendingSignal(){
-  /* Prefer the selected signal; if it has closed, promote the newest PENDING
-     record. Older PENDING records remain independently monitored in History. */
-  let active=activeSetupKey
-    ? signalHistory.find(s=>s && getSignalKey(s)===activeSetupKey && s.status==="PENDING")
-    : null;
-  if(!active){
-    active=signalHistory.find(s=>s && s.status==="PENDING")||null;
-    activeSetupKey=active?getSignalKey(active):null;
-  }
-  return active;
+  /* Only the signal explicitly promoted to AI TRADE SETUP is displayed.
+     Older PENDING signals remain in History and keep being monitored. */
+  if(!activeSetupKey) return null;
+  const active=signalHistory.find(s=>
+    s && (String(s.setupNumber||0)+"_"+String(s.timeframeMinutes||SCANNER_TIMEFRAME_MINUTES)+"_"+s.type+"_"+s.candleTime)===activeSetupKey
+  );
+  return active && active.status==="PENDING" ? active : null;
 }
 
 function hasActivePendingSignal(){
@@ -2896,7 +2889,7 @@ $("waitingMessage").textContent=
 function receiveNativeSignal(payload){
   try{
     const p=(typeof payload==="string")?JSON.parse(payload):payload;
-    if(!p) return false;
+    if(!p) return;
 
     const tf=String(p.timeframe||"").toUpperCase();
     const tfMin=Number(
@@ -2928,7 +2921,7 @@ function receiveNativeSignal(payload){
       ![5,15,30].includes(tfMin)
     ){
       console.warn("Reliable scanner payload invalid:",p);
-      return false;
+      return;
     }
 
     if(
@@ -2937,14 +2930,14 @@ function receiveNativeSignal(payload){
       (tfMin===5 && setupNumber!==5)
     ){
       console.warn("Reliable scanner setup/timeframe mismatch:",p);
-      return false;
+      return;
     }
 
     const risk=Math.abs(entry-sl);
 
     if(!Number.isFinite(risk)||!(risk>0)){
       console.warn("Reliable scanner risk invalid:",p);
-      return false;
+      return;
     }
 
     const res={
@@ -2986,25 +2979,17 @@ function receiveNativeSignal(payload){
         )
     };
 
-    /* Idempotent delivery: FCM and notification-tap delivery can both arrive.
-       An existing signal is acknowledged but never duplicated in History. */
-    const signalKey=getSignalKey(res);
-    const existing=signalHistory.find(s=>s && getSignalKey(s)===signalKey);
-    if(existing){
-      if(existing.status==="PENDING"){
-        activeSetupKey=signalKey;
-        renderActivePendingSignal(existing);
-      }
-      return true;
-    }
-
-    /* Preserve scanner-approved Entry / SL / TP exactly. */
+    /*
+     * Pass the scanner-approved result directly into
+     * the existing AI Trade Setup + History pipeline.
+     */
     triggerValidSignal(res);
-    return signalHistory.some(s=>s && getSignalKey(s)===signalKey);
 
   }catch(e){
-    console.warn("Reliable scanner signal sync error:",e);
-    return false;
+    console.warn(
+      "Reliable scanner signal sync error:",
+      e
+    );
   }
 }
 
@@ -3012,16 +2997,6 @@ function receiveNativeSignal(payload){
 /* VALID SIGNAL */
 
 function triggerValidSignal(res){
-
-const signalKey=getSignalKey(res);
-const alreadyStored=signalHistory.find(s=>s && getSignalKey(s)===signalKey);
-if(alreadyStored){
-  if(alreadyStored.status==="PENDING"){
-    activeSetupKey=signalKey;
-    renderActivePendingSignal(alreadyStored);
-  }
-  return;
-}
 
 /* A new valid signal ALWAYS replaces the signal shown in AI TRADE SETUP.
    The previous signal is NOT deleted: it stays in History as PENDING
@@ -3134,6 +3109,15 @@ activeSlPips=res.pips;
 
 calcLot();
 
+const signalKey=
+String(res.setupNumber||0)+"_"+String(res.timeframeMinutes||SCANNER_TIMEFRAME_MINUTES)+"_"+res.type+"_"+res.candleTime;
+
+if(lastSignalKey===signalKey){
+
+return;
+
+}
+
 lastSignalKey=signalKey;
 
 signalHistory.unshift({
@@ -3166,9 +3150,7 @@ pips:res.pips,
 candleTime:res.candleTime,
 candleCloseTime:Number(res.candleCloseTime)|| (Number(res.candleTime)+(Number(res.timeframeMinutes)||SCANNER_TIMEFRAME_MINUTES)*60*1000),
 timeframeMinutes:Number(res.timeframeMinutes)||SCANNER_TIMEFRAME_MINUTES,
-setupNumber:Number(res.setupNumber)||0,
-timeframe:String(res.timeframe||("M"+(Number(res.timeframeMinutes)||SCANNER_TIMEFRAME_MINUTES))),
-signalKey:signalKey
+setupNumber:Number(res.setupNumber)||0
 
 });
 
@@ -3531,13 +3513,21 @@ function processPendingSignalsFromCandles(candles,livePrice,allowedSetupNumbers=
 }
 
 function updateActiveSetupAfterStatusChange(){
-  /* Keep the AI card populated while ANY timeframe still has a PENDING signal. */
-  const active=signalHistory.find(s=>s && getSignalKey(s)===activeSetupKey && s.status==="PENDING")
-    || signalHistory.find(s=>s && s.status==="PENDING")
-    || null;
-  activeSetupKey=active?getSignalKey(active):null;
-  if(active) renderActivePendingSignal(active);
-  else resetAiSetupDisplay();
+  /* Clear AI TRADE SETUP immediately when its displayed signal reaches TP/SL. */
+  if(activeSetupKey){
+    const activeRecord=signalHistory.find(s=>
+      s && (String(s.setupNumber||0)+"_"+String(s.timeframeMinutes||SCANNER_TIMEFRAME_MINUTES)+"_"+s.type+"_"+s.candleTime)===activeSetupKey
+    );
+
+    if(!activeRecord || activeRecord.status!=="PENDING"){
+      activeSetupKey=null;
+      resetAiSetupDisplay();
+    }else{
+      renderActivePendingSignal(activeRecord);
+    }
+  }else{
+    syncAiTradeSetup();
+  }
 }
 
 async function checkPendingSignals(candleData=null){
@@ -3561,21 +3551,23 @@ async function checkPendingSignals(candleData=null){
 
   if(Number.isFinite(tickMid) && tickMid>0 && tickAge<=LIVE_MAX_AGE_MS){
     livePrice=tickMid;
-    processPendingSignalsAtPrice(livePrice,[1,2,3]);
+    processPendingSignalsAtPrice(livePrice,[1,2,3,4,5]);
   }else{
     const price=await getLiveMarketPrice();
     if(Number.isFinite(price)){
       livePrice=price;
-      processPendingSignalsAtPrice(livePrice,[1,2,3]);
+      processPendingSignalsAtPrice(livePrice,[1,2,3,4,5]);
     }
   }
 
   /*
-    IMPORTANT:
-    - Setup 1/2/3 keep using the supplied CLOSED M30 candles.
-    - Setup 4 is independent and uses CLOSED M15 candles only.
-      This guarantees Setup 4 HIT TP/HIT SL is determined by M15,
-      never by M30 or a live tick.
+    Historical recovery stays isolated by signal timeframe:
+    - Setup 1/2/3: supplied M30 candles;
+    - Setup 4: closed M15 candles;
+    - Setup 5: closed M5 candles.
+
+    Live price above is allowed to settle all setups after Entry is touched;
+    candles below recover moves missed while the page was suspended.
   */
   if(Array.isArray(candleData) && candleData.length){
     const nonSetup4Pending=signalHistory.some(s=>
@@ -4031,7 +4023,9 @@ calcLot();
 
 /* Restore the newest PENDING signal after refresh/reopen. */
 const restorePending=signalHistory.find(s=>s && s.status==="PENDING");
-activeSetupKey=restorePending ? getSignalKey(restorePending) : null;
+activeSetupKey=restorePending
+  ? String(restorePending.setupNumber||0)+"_"+String(restorePending.timeframeMinutes||SCANNER_TIMEFRAME_MINUTES)+"_"+restorePending.type+"_"+restorePending.candleTime
+  : null;
 syncAiTradeSetup();
 
 updateChart();
