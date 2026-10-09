@@ -168,19 +168,10 @@ class MainActivity : AppCompatActivity() {
         }
 
 
-        private fun signalKey(
-            obj: JSONObject
-        ): String {
-
-            return (
-                obj.optString("setup") +
-                "_" +
-                obj.optString("timeframe") +
-                "_" +
-                obj.optString("type") +
-                "_" +
-                obj.optString("candleTime")
-            )
+        private fun signalKey(obj: JSONObject): String {
+            val setup = obj.optString("setup", obj.optString("setupNumber"))
+            return obj.optString("timeframe") + "_" + setup + "_" +
+                obj.optString("type") + "_" + obj.optString("candleTime")
         }
     }
 
@@ -813,8 +804,8 @@ class MainActivity : AppCompatActivity() {
                       if (typeof window.receiveNativeSignal !== 'function') {
                         return 'NOT_READY';
                       }
-                      window.receiveNativeSignal($jsArgument);
-                      return 'DELIVERED';
+                      const accepted = window.receiveNativeSignal($jsArgument);
+                      return accepted === true ? 'DELIVERED' : 'NOT_ACCEPTED';
                     })();
                     """.trimIndent()
                 ) { result ->
