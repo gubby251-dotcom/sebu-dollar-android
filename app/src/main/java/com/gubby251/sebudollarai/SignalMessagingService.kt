@@ -63,6 +63,7 @@ class SignalMessagingService : FirebaseMessagingService() {
         if (message.data.isNotEmpty()) {
 
             MainActivity.receiveNativeSignal(
+                applicationContext,
                 message.data
             )
         }
