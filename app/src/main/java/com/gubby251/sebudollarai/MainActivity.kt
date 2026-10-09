@@ -67,6 +67,7 @@ class MainActivity : AppCompatActivity() {
          */
         @JvmStatic
         fun receiveNativeSignal(
+            context: Context,
             data: Map<String, String>
         ) {
 
@@ -82,6 +83,7 @@ class MainActivity : AppCompatActivity() {
             } else {
 
                 enqueueSignal(
+                    context.applicationContext,
                     data
                 )
             }
@@ -92,17 +94,14 @@ class MainActivity : AppCompatActivity() {
          * Simpan signal kalau Activity belum hidup.
          */
         private fun enqueueSignal(
+            context: Context,
             data: Map<String, String>
         ) {
 
             try {
-
-                val context =
-                    AppContextHolder.context
-                        ?: return
-
+                val appContext = context.applicationContext
                 val prefs =
-                    context.getSharedPreferences(
+                    appContext.getSharedPreferences(
                         PREFS,
                         Context.MODE_PRIVATE
                     )
@@ -222,7 +221,7 @@ class MainActivity : AppCompatActivity() {
 
             if (signal.isNotEmpty()) {
 
-                receiveNativeSignal(
+                receiveSignalOnUi(
                     signal
                 )
             }
@@ -782,7 +781,7 @@ class MainActivity : AppCompatActivity() {
             try {
 
                 if (!::webView.isInitialized) {
-                    if (!fromQueue) enqueueSignal(data)
+                    if (!fromQueue) enqueueSignal(applicationContext, data)
                     return@runOnUiThread
                 }
 
@@ -812,13 +811,13 @@ class MainActivity : AppCompatActivity() {
                     if (result == "\"DELIVERED\"") {
                         if (fromQueue) removeQueuedSignal(data)
                     } else if (!fromQueue) {
-                        enqueueSignal(data)
+                        enqueueSignal(applicationContext, data)
                     }
                 }
 
             } catch (e: Exception) {
                 e.printStackTrace()
-                if (!fromQueue) enqueueSignal(data)
+                if (!fromQueue) enqueueSignal(applicationContext, data)
             }
         }
     }
