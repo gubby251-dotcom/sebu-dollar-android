@@ -1524,7 +1524,7 @@ function startBiQuoteWebSocket(){
       biQuoteLiveTick=tick;
       /* Immediate TP/SL evaluation on every real-time XAUUSD tick.
          This does not alter the signal/scanner rules. */
-      processPendingSignalsAtPrice(mid,[1,2,3]);
+      processPendingSignalsAtPrice(mid,[1,2,3,4,5]);
       /* Do not call markLiveFeed here: REST freshness is authoritative. */
     });
 
@@ -3212,7 +3212,7 @@ res.type==="BUY"
    This specifically prevents the old failure where price touched Entry,
    then TP/SL, but the browser missed the Entry tick and left History PENDING.
 */
-function processPendingSignalsAtPrice(price,allowedSetupNumbers=[1,2,3]){
+function processPendingSignalsAtPrice(price,allowedSetupNumbers=[1,2,3,4,5]){
   if(!Number.isFinite(price)) return false;
 
   /*
@@ -3561,12 +3561,12 @@ async function checkPendingSignals(candleData=null){
 
   if(Number.isFinite(tickMid) && tickMid>0 && tickAge<=LIVE_MAX_AGE_MS){
     livePrice=tickMid;
-    processPendingSignalsAtPrice(livePrice,[1,2,3]);
+    processPendingSignalsAtPrice(livePrice,[1,2,3,4,5]);
   }else{
     const price=await getLiveMarketPrice();
     if(Number.isFinite(price)){
       livePrice=price;
-      processPendingSignalsAtPrice(livePrice,[1,2,3]);
+      processPendingSignalsAtPrice(livePrice,[1,2,3,4,5]);
     }
   }
 
