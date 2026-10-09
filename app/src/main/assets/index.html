@@ -1524,7 +1524,7 @@ function startBiQuoteWebSocket(){
       biQuoteLiveTick=tick;
       /* Immediate TP/SL evaluation on every real-time XAUUSD tick.
          This does not alter the signal/scanner rules. */
-      processPendingSignalsAtPrice(mid);
+      processPendingSignalsAtPrice(mid,[1,2,3]);
       /* Do not call markLiveFeed here: REST freshness is authoritative. */
     });
 
@@ -3186,14 +3186,15 @@ res.type==="BUY"
 /* CHECK ALL PENDING SIGNALS
    STATUS ONLY — the M30 signal engine above is untouched.
 
-   Entry/TP/SL monitoring uses two layers:
-   1) every live BiQuote tick for immediate detection;
-   2) M30 OHLC recovery as a safety net when a tick was missed.
+   Entry/TP/SL monitoring is isolated by setup timeframe:
+   1) live BiQuote ticks and M30 OHLC recovery for Setup 1/2/3 only;
+   2) closed M15 candles for Setup 4 only;
+   3) closed M5 candles for Setup 5 only.
 
    This specifically prevents the old failure where price touched Entry,
    then TP/SL, but the browser missed the Entry tick and left History PENDING.
 */
-function processPendingSignalsAtPrice(price){
+function processPendingSignalsAtPrice(price,allowedSetupNumbers=[1,2,3]){
   if(!Number.isFinite(price)) return false;
 
   /*
@@ -3211,7 +3212,8 @@ function processPendingSignalsAtPrice(price){
     - Historical candle recovery remains the safety net for signals missed
       while the page was backgrounded/suspended.
   */
-  const pendingList=signalHistory.filter(s=>s && s.status==="PENDING");
+  const allowedSetups=new Set(allowedSetupNumbers.map(Number));
+  const pendingList=signalHistory.filter(s=>s && s.status==="PENDING" && allowedSetups.has(Number(s.setupNumber||0)));
   if(!pendingList.length){
     syncAiTradeSetup();
     return false;
@@ -3316,15 +3318,16 @@ function processPendingSignalsAtPrice(price){
 
 /*
   OHLC RECOVERY FALLBACK
-  If a browser/device missed the exact Entry tick, recover Entry from the
-  M30 candle LOW/HIGH. After Entry is recovered, use candle HIGH/LOW to
+  The caller must pass candles from the signal's own timeframe. If a browser/device missed the exact Entry tick, recover Entry from the
+  source candle LOW/HIGH. After Entry is recovered, use candle HIGH/LOW to
   recover TP/SL. This function never creates or changes a signal; it only
   changes the status of an already-existing PENDING signal.
 */
-function processPendingSignalsFromCandles(candles,livePrice){
+function processPendingSignalsFromCandles(candles,livePrice,allowedSetupNumbers=[1,2,3]){
   if(!Array.isArray(candles)||!candles.length) return false;
 
-  const pendingList=signalHistory.filter(s=>s && s.status==="PENDING");
+  const allowedSetups=new Set(allowedSetupNumbers.map(Number));
+  const pendingList=signalHistory.filter(s=>s && s.status==="PENDING" && allowedSetups.has(Number(s.setupNumber||0)));
   if(!pendingList.length) return false;
 
   let changed=false;
@@ -3548,12 +3551,12 @@ async function checkPendingSignals(candleData=null){
 
   if(Number.isFinite(tickMid) && tickMid>0 && tickAge<=LIVE_MAX_AGE_MS){
     livePrice=tickMid;
-    processPendingSignalsAtPrice(livePrice);
+    processPendingSignalsAtPrice(livePrice,[1,2,3]);
   }else{
     const price=await getLiveMarketPrice();
     if(Number.isFinite(price)){
       livePrice=price;
-      processPendingSignalsAtPrice(livePrice);
+      processPendingSignalsAtPrice(livePrice,[1,2,3]);
     }
   }
 
@@ -3569,7 +3572,7 @@ async function checkPendingSignals(candleData=null){
       s && s.status==="PENDING" && Number(s.setupNumber)!==4
     );
     if(nonSetup4Pending){
-      processPendingSignalsFromCandles(candleData,livePrice);
+      processPendingSignalsFromCandles(candleData,livePrice,[1,2,3]);
     }
   }
 
@@ -3591,7 +3594,8 @@ async function checkPendingSignals(candleData=null){
          CLOSED M15 candles. No M30 candle or live price may change it. */
       processPendingSignalsFromCandles(
         closedM15.filter(c=>Number.isFinite(Number(c?.time))),
-        null
+        null,
+        [4]
       );
     }catch(e){
       console.warn("BiQuote XAUUSD M15 monitoring gagal:",e);
@@ -3606,7 +3610,7 @@ async function checkPendingSignals(candleData=null){
     try{
       const m5Raw=await getBiQuoteM5Candles();
       const closedM5=getClosedM5Candles(m5Raw);
-      processPendingSignalsFromCandles(closedM5.filter(c=>Number.isFinite(Number(c?.time))),null);
+      processPendingSignalsFromCandles(closedM5.filter(c=>Number.isFinite(Number(c?.time))),null,[5]);
     }catch(e){
       console.warn("BiQuote XAUUSD M5 monitoring gagal:",e);
     }
