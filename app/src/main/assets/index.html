@@ -2652,24 +2652,16 @@ function evaluateSetup4M15(candles){
   const twoBeforeBullish=isBullish(beforeC1)&&isBullish(beforeBeforeC1);
   const twoBeforeBearish=isBearish(beforeC1)&&isBearish(beforeBeforeC1);
 
-  /*
-     C1 must engulf the BODY of the candle immediately before C1.
-     This is a BODY engulfing confirmation; C1 does not need to close
-     beyond the previous candle's wick.
-  */
+  /* C1 must break the previous candle's wick with its body and close. */
   const c1BullishBodyEngulf=
-    isBearish(beforeC1)&&
     isBullish(c1)&&
-    Number(c1.open)<=Number(beforeC1.close)&&
-    Number(c1.close)>=Number(beforeC1.open)&&
-    Math.abs(Number(c1.close)-Number(c1.open))>=Math.abs(Number(beforeC1.close)-Number(beforeC1.open));
+    Number(c1.open)<=Number(beforeC1.high)&&
+    Number(c1.close)>Number(beforeC1.high);
 
   const c1BearishBodyEngulf=
-    isBullish(beforeC1)&&
     isBearish(c1)&&
-    Number(c1.open)>=Number(beforeC1.close)&&
-    Number(c1.close)<=Number(beforeC1.open)&&
-    Math.abs(Number(c1.close)-Number(c1.open))>=Math.abs(Number(beforeC1.close)-Number(beforeC1.open));
+    Number(c1.open)>=Number(beforeC1.low)&&
+    Number(c1.close)<Number(beforeC1.low);
 
   /*
      C2 must cross C1's WICK extreme with the C2 BODY.
@@ -2806,16 +2798,14 @@ function evaluateSetup5M5(candles){
   const twoBeforeBearish=isBearish(beforeC1)&&isBearish(beforeBeforeC1);
 
   const c1BullishBodyEngulf=
-    isBearish(beforeC1)&&isBullish(c1)&&
-    Number(c1.open)<=Number(beforeC1.close)&&
-    Number(c1.close)>=Number(beforeC1.open)&&
-    Math.abs(Number(c1.close)-Number(c1.open))>=Math.abs(Number(beforeC1.close)-Number(beforeC1.open));
+    isBullish(c1)&&
+    Number(c1.open)<=Number(beforeC1.high)&&
+    Number(c1.close)>Number(beforeC1.high);
 
   const c1BearishBodyEngulf=
-    isBullish(beforeC1)&&isBearish(c1)&&
-    Number(c1.open)>=Number(beforeC1.close)&&
-    Number(c1.close)<=Number(beforeC1.open)&&
-    Math.abs(Number(c1.close)-Number(c1.open))>=Math.abs(Number(beforeC1.close)-Number(beforeC1.open));
+    isBearish(c1)&&
+    Number(c1.open)>=Number(beforeC1.low)&&
+    Number(c1.close)<Number(beforeC1.low);
 
   const c2BuyBodyBreaksC1High=
     isBullish(c2)&&Number(c2.open)<=Number(c1.high)&&Number(c2.close)>Number(c1.high);
