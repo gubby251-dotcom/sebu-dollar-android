@@ -2423,20 +2423,16 @@ function setup2(c,dir){
   const c1=n-2;
   const c2=n-1;
 
-  // ATURAN 1: konfirmasi pullback dalam tren yang tidak harus berurutan.
-  // SELL saat tren naik: candle sebelum C1 bullish, C1 bullish,
-  // lalu C2 bearish engulfing body C1.
-  // BUY saat tren turun: kebalikan dari pola SELL.
+  // ATURAN 1: pertahankan struktur pullback; C2 wajib memakai
+  // engulfing umum M30 yang menutup melewati wick C1.
   let rule1=false;
   const p=c[preC1];
   const a=c[c1];
   const b=c[c2];
   if(dir==='SELL'){
-    rule1=isBullish(p)&&isBullish(a)&&isBearish(b)&&
-      Number(b.open)>=Number(a.close)&&Number(b.close)<=Number(a.open);
+    rule1=isBullish(p)&&isBullish(a)&&isBearishEngulfing(a,b);
   }else if(dir==='BUY'){
-    rule1=isBearish(p)&&isBearish(a)&&isBullish(b)&&
-      Number(b.open)<=Number(a.close)&&Number(b.close)>=Number(a.open);
+    rule1=isBearish(p)&&isBearish(a)&&isBullishEngulfing(a,b);
   }
 
   // ATURAN 2: ekstrem lokal C1 dibandingkan 12 candle M30 sebelumnya.
@@ -2546,23 +2542,19 @@ function evaluateSetup4M15(candles){
   const twoBeforeBearish=isBearish(beforeC1)&&isBearish(beforeBeforeC1);
 
   /*
-     C1 must engulf the BODY of the candle immediately before C1.
-     This is a BODY engulfing confirmation; C1 does not need to close
-     beyond the previous candle's wick.
+     NEW C1 confirmation shared with scanner:
+     BUY C1 body closes above the prior candle HIGH/WICK.
+     SELL C1 body closes below the prior candle LOW/WICK.
   */
   const c1BullishBodyEngulf=
-    isBearish(beforeC1)&&
     isBullish(c1)&&
-    Number(c1.open)<=Number(beforeC1.close)&&
-    Number(c1.close)>=Number(beforeC1.open)&&
-    Math.abs(Number(c1.close)-Number(c1.open))>=Math.abs(Number(beforeC1.close)-Number(beforeC1.open));
+    Number(c1.open)<=Number(beforeC1.high)&&
+    Number(c1.close)>Number(beforeC1.high);
 
   const c1BearishBodyEngulf=
-    isBullish(beforeC1)&&
     isBearish(c1)&&
-    Number(c1.open)>=Number(beforeC1.close)&&
-    Number(c1.close)<=Number(beforeC1.open)&&
-    Math.abs(Number(c1.close)-Number(c1.open))>=Math.abs(Number(beforeC1.close)-Number(beforeC1.open));
+    Number(c1.open)>=Number(beforeC1.low)&&
+    Number(c1.close)<Number(beforeC1.low);
 
   /*
      C2 must cross C1's WICK extreme with the C2 BODY.
@@ -2699,16 +2691,14 @@ function evaluateSetup5M5(candles){
   const twoBeforeBearish=isBearish(beforeC1)&&isBearish(beforeBeforeC1);
 
   const c1BullishBodyEngulf=
-    isBearish(beforeC1)&&isBullish(c1)&&
-    Number(c1.open)<=Number(beforeC1.close)&&
-    Number(c1.close)>=Number(beforeC1.open)&&
-    Math.abs(Number(c1.close)-Number(c1.open))>=Math.abs(Number(beforeC1.close)-Number(beforeC1.open));
+    isBullish(c1)&&
+    Number(c1.open)<=Number(beforeC1.high)&&
+    Number(c1.close)>Number(beforeC1.high);
 
   const c1BearishBodyEngulf=
-    isBullish(beforeC1)&&isBearish(c1)&&
-    Number(c1.open)>=Number(beforeC1.close)&&
-    Number(c1.close)<=Number(beforeC1.open)&&
-    Math.abs(Number(c1.close)-Number(c1.open))>=Math.abs(Number(beforeC1.close)-Number(beforeC1.open));
+    isBearish(c1)&&
+    Number(c1.open)>=Number(beforeC1.low)&&
+    Number(c1.close)<Number(beforeC1.low);
 
   const c2BuyBodyBreaksC1High=
     isBullish(c2)&&Number(c2.open)<=Number(c1.high)&&Number(c2.close)>Number(c1.high);
@@ -3437,7 +3427,7 @@ function processPendingSignalsFromCandles(candles,livePrice,allowedSetupNumbers=
 
       /* Both targets inside the same later OHLC candle: never guess order. */
       if(hitTp && hitSl){
-        const p=Number(livePrice);
+        const p=(livePrice===null || livePrice===undefined || livePrice==="") ? NaN : Number(livePrice);
         if(Number.isFinite(p)){
           if(s.type==="BUY" && p>=tp){
             s.status="HIT TP";
@@ -3494,7 +3484,7 @@ function processPendingSignalsFromCandles(candles,livePrice,allowedSetupNumbers=
       close the signal immediately without waiting for the next candle close.
     */
     if(s.status==="PENDING" && s.entryTouched){
-      const p=Number(livePrice);
+      const p=(livePrice===null || livePrice===undefined || livePrice==="") ? NaN : Number(livePrice);
       if(Number.isFinite(p)){
         if(s.type==="BUY" && p>=tp){
           s.status="HIT TP";
