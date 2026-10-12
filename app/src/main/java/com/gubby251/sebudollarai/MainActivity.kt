@@ -67,7 +67,6 @@ class MainActivity : AppCompatActivity() {
          */
         @JvmStatic
         fun receiveNativeSignal(
-            context: Context,
             data: Map<String, String>
         ) {
 
@@ -83,7 +82,6 @@ class MainActivity : AppCompatActivity() {
             } else {
 
                 enqueueSignal(
-                    context.applicationContext,
                     data
                 )
             }
@@ -94,14 +92,17 @@ class MainActivity : AppCompatActivity() {
          * Simpan signal kalau Activity belum hidup.
          */
         private fun enqueueSignal(
-            context: Context,
             data: Map<String, String>
         ) {
 
             try {
-                val appContext = context.applicationContext
+
+                val context =
+                    AppContextHolder.context
+                        ?: return
+
                 val prefs =
-                    appContext.getSharedPreferences(
+                    context.getSharedPreferences(
                         PREFS,
                         Context.MODE_PRIVATE
                     )
@@ -167,10 +168,19 @@ class MainActivity : AppCompatActivity() {
         }
 
 
-        private fun signalKey(obj: JSONObject): String {
-            val setup = obj.optString("setup", obj.optString("setupNumber"))
-            return obj.optString("timeframe") + "_" + setup + "_" +
-                obj.optString("type") + "_" + obj.optString("candleTime")
+        private fun signalKey(
+            obj: JSONObject
+        ): String {
+
+            return (
+                obj.optString("setup") +
+                "_" +
+                obj.optString("timeframe") +
+                "_" +
+                obj.optString("type") +
+                "_" +
+                obj.optString("candleTime")
+            )
         }
     }
 
@@ -221,7 +231,7 @@ class MainActivity : AppCompatActivity() {
 
             if (signal.isNotEmpty()) {
 
-                receiveSignalOnUi(
+                receiveNativeSignal(
                     signal
                 )
             }
@@ -781,7 +791,7 @@ class MainActivity : AppCompatActivity() {
             try {
 
                 if (!::webView.isInitialized) {
-                    if (!fromQueue) enqueueSignal(applicationContext, data)
+                    if (!fromQueue) enqueueSignal(data)
                     return@runOnUiThread
                 }
 
@@ -803,21 +813,21 @@ class MainActivity : AppCompatActivity() {
                       if (typeof window.receiveNativeSignal !== 'function') {
                         return 'NOT_READY';
                       }
-                      const accepted = window.receiveNativeSignal($jsArgument);
-                      return accepted === true ? 'DELIVERED' : 'NOT_ACCEPTED';
+                      window.receiveNativeSignal($jsArgument);
+                      return 'DELIVERED';
                     })();
                     """.trimIndent()
                 ) { result ->
                     if (result == "\"DELIVERED\"") {
                         if (fromQueue) removeQueuedSignal(data)
                     } else if (!fromQueue) {
-                        enqueueSignal(applicationContext, data)
+                        enqueueSignal(data)
                     }
                 }
 
             } catch (e: Exception) {
                 e.printStackTrace()
-                if (!fromQueue) enqueueSignal(applicationContext, data)
+                if (!fromQueue) enqueueSignal(data)
             }
         }
     }
