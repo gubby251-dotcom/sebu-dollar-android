@@ -739,6 +739,9 @@ class MainActivity : AppCompatActivity() {
                      */
                     flushPendingSignals()
 
+                    // Sinkronkan riwayat signal dari Firestore setelah halaman siap.
+                    syncSignalHistoryFromFirestore()
+
                     /*
                      * Kalau Activity dibuka melalui
                      * notifikasi, proses Intent juga.
@@ -772,6 +775,95 @@ class MainActivity : AppCompatActivity() {
      * Dipanggil saat signal masuk ketika
      * MainActivity sedang hidup.
      */
+    private fun syncSignalHistoryFromFirestore() {
+        val currentUser = FirebaseAuth.getInstance().currentUser ?: return
+        val db = FirebaseFirestore.getInstance()
+
+        db.collection("sent_signals")
+            .get(Source.SERVER)
+            .addOnSuccessListener { snapshot ->
+                try {
+                    val rows = org.json.JSONArray()
+
+                    for (doc in snapshot.documents) {
+                        val row = org.json.JSONObject()
+
+                        fun putValue(target: String, vararg candidates: String) {
+                            for (candidate in candidates) {
+                                val value = doc.get(candidate)
+                                if (value != null) {
+                                    when (value) {
+                                        is com.google.firebase.Timestamp ->
+                                            row.put(target, value.toDate().time)
+                                        is java.util.Date ->
+                                            row.put(target, value.time)
+                                        else -> row.put(target, value.toString())
+                                    }
+                                    return
+                                }
+                            }
+                        }
+
+                        putValue("type", "type")
+                        putValue("timeframe", "timeframe")
+                        putValue("timeframeMinutes", "timeframeMinutes")
+                        putValue("setupNumber", "setupNumber", "setup")
+                        putValue("entry", "entry")
+                        putValue("sl", "sl")
+                        putValue("tp", "tp")
+                        // Utamakan status hasil akhir jika tersedia.
+                        putValue("status", "resultStatus", "status")
+                        putValue("resultStatus", "resultStatus", "status")
+                        putValue("candleTime", "candleTime")
+
+                        // Mendukung candleTime yang disimpan sebagai Firestore Timestamp/Date.
+                        if (!row.has("candleTime")) {
+                            val idPrefix = doc.id.substringBefore("_")
+                            idPrefix.toLongOrNull()?.let { row.put("candleTime", it) }
+                        }
+
+                        putValue("candleCloseTime", "candleCloseTime")
+                        putValue("entryTouched", "entryTouched")
+                        putValue("entryTouchedAt", "entryTouchedAt")
+                        putValue("closePrice", "closePrice")
+                        putValue("closedAt", "closedAt")
+                        putValue("statusUpdatedAt", "statusUpdatedAt")
+                        putValue("setupName", "setupName")
+
+                        val timeframe = row.optString("timeframe", "").uppercase()
+                        if (!row.has("timeframeMinutes")) {
+                            val minutes = when (timeframe) {
+                                "M5" -> 5
+                                "M15" -> 15
+                                "M30" -> 30
+                                else -> 0
+                            }
+                            if (minutes > 0) row.put("timeframeMinutes", minutes)
+                        }
+
+                        if (row.has("type") && row.has("timeframe") &&
+                            row.has("entry") && row.has("sl") && row.has("tp") &&
+                            row.has("candleTime")) {
+                            rows.put(row)
+                        }
+                    }
+
+                    val payload = org.json.JSONObject.quote(rows.toString())
+                    runOnUiThread {
+                        val js = "window.mergeFirestoreSignalHistory && window.mergeFirestoreSignalHistory($payload);"
+                        if (::webView.isInitialized) {
+                            webView.evaluateJavascript(js, null)
+                        }
+                    }
+                } catch (e: Exception) {
+                    android.util.Log.e("SEBU_HISTORY", "Gagal membentuk riwayat Firestore", e)
+                }
+            }
+            .addOnFailureListener { error ->
+                android.util.Log.e("SEBU_HISTORY", "Gagal membaca sent_signals untuk ${currentUser.uid}", error)
+            }
+    }
+
     private fun receiveSignalOnUi(
         data: Map<String, String>,
         fromQueue: Boolean = false
