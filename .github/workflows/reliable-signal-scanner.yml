@@ -2,11 +2,9 @@ name: SEBU DOLLAR AI Reliable M30 Realtime Scanner
 
 on:
   workflow_dispatch:
-
   push:
     branches:
       - main
-
   schedule:
     - cron: "7 */6 * * *"
 
@@ -21,7 +19,6 @@ concurrency:
 jobs:
   scan:
     runs-on: ubuntu-latest
-
     timeout-minutes: 350
 
     steps:
@@ -36,7 +33,7 @@ jobs:
       - name: Install Firebase Admin
         run: npm install --no-save firebase-admin
 
-      - name: Run Reliable M30 Scanner Continuously
+      - name: Run Scanner and TP SL Status Monitor
         env:
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
           GH_TOKEN: ${{ github.token }}
@@ -48,47 +45,41 @@ jobs:
           POLL_SECONDS=20
           NEXT_WORKFLOW="reliable-signal-scanner.yml"
 
-          echo "========================================"
-          echo "SEBU DOLLAR AI"
-          echo "REALTIME M30 SCANNER"
-          echo "Polling interval: ${POLL_SECONDS}s"
-          echo "Runner handoff before timeout: 340m"
-          echo "========================================"
+          echo "SEBU DOLLAR AI — SCANNER + TP/SL STATUS MONITOR"
+          echo "Scanner poll: ${POLL_SECONDS}s"
 
           while true; do
-
             NOW=$(date +%s)
             ELAPSED=$((NOW - START_TIME))
 
             if [ "$ELAPSED" -ge "$RUNTIME_LIMIT" ]; then
-
-              echo "Mendekati batas runner."
-              echo "Menjalankan handoff ke runner berikutnya..."
+              echo "Runner mendekati batas; menjadwalkan runner berikutnya..."
 
               if gh workflow run "$NEXT_WORKFLOW" \
                 --repo "${{ github.repository }}" \
-                --ref main
-              then
+                --ref main; then
                 echo "Handoff runner berikutnya berhasil dijadwalkan."
               else
-                echo "PERINGATAN: handoff gagal."
-                echo "Backup schedule akan menjadi cadangan."
+                echo "PERINGATAN: handoff gagal; backup schedule menjadi cadangan."
               fi
 
               break
             fi
 
             echo "----------------------------------------"
-            echo "Scanner check:"
-            echo "$(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+            echo "Check: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
 
             if node scanner/reliable-index.mjs; then
               echo "Scanner check selesai."
             else
-              echo "Scanner error."
-              echo "Tetap hidup dan mencoba lagi."
+              echo "Scanner error; akan dicoba kembali."
+            fi
+
+            if node scanner/status-monitor.mjs; then
+              echo "Status monitor selesai."
+            else
+              echo "Status monitor error; akan dicoba kembali."
             fi
 
             sleep "${POLL_SECONDS}"
-
           done
