@@ -598,9 +598,7 @@ class MainActivity : AppCompatActivity() {
     ) {
 
         if (uid == ADMIN_UID) {
-
-            enterAi()
-
+            preparePersistentHistoryBoundary(uid) { enterAi() }
             return
         }
 
@@ -625,9 +623,7 @@ class MainActivity : AppCompatActivity() {
 
 
                 if (active) {
-
-                    enterAi()
-
+                    preparePersistentHistoryBoundary(uid) { enterAi() }
                 } else {
 
                     FirebaseMessaging
@@ -661,6 +657,45 @@ class MainActivity : AppCompatActivity() {
                     )
                 )
             }
+    }
+
+
+    /**
+     * Server-persistent history boundary.
+     * If app data was cleared, the local marker disappears while this server
+     * document remains. Move the boundary forward before opening History.
+     */
+    private fun preparePersistentHistoryBoundary(uid: String, onReady: () -> Unit) {
+        val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
+        val markerKey = "history_boundary_initialized_$uid"
+        val boundaryKey = "history_boundary_ms_$uid"
+
+        if (prefs.getBoolean(markerKey, false)) {
+            onReady()
+            return
+        }
+
+        val stateRef = firestore.collection("history_state").document(uid)
+        val now = System.currentTimeMillis()
+        stateRef.get(Source.SERVER).addOnSuccessListener { doc ->
+            val oldBoundary = doc.getLong("boundaryMs") ?: 0L
+            val nextBoundary = maxOf(now, oldBoundary)
+            stateRef.set(mapOf("boundaryMs" to nextBoundary))
+                .addOnSuccessListener {
+                    prefs.edit()
+                        .putBoolean(markerKey, true)
+                        .putLong(boundaryKey, nextBoundary)
+                        .apply()
+                    onReady()
+                }
+                .addOnFailureListener { error ->
+                    android.util.Log.e("SEBU_HISTORY", "Gagal menyimpan batas riwayat", error)
+                    showLoginScreen("Gagal menyiapkan riwayat aman. Periksa koneksi lalu coba login kembali.")
+                }
+        }.addOnFailureListener { error ->
+            android.util.Log.e("SEBU_HISTORY", "Gagal membaca batas riwayat", error)
+            showLoginScreen("Gagal memeriksa batas riwayat. Periksa koneksi lalu coba login kembali.")
+        }
     }
 
 
@@ -849,8 +884,10 @@ class MainActivity : AppCompatActivity() {
                     }
 
                     val payload = org.json.JSONObject.quote(rows.toString())
+                    val boundary = getSharedPreferences(PREFS, MODE_PRIVATE)
+                        .getLong("history_boundary_ms_${currentUser.uid}", 0L)
                     runOnUiThread {
-                        val js = "window.mergeFirestoreSignalHistory && window.mergeFirestoreSignalHistory($payload);"
+                        val js = "(function(){ if(window.setServerHistoryBoundary) window.setServerHistoryBoundary($boundary); if(window.mergeFirestoreSignalHistory) return window.mergeFirestoreSignalHistory($payload); return 'NOT_READY'; })();"
                         if (::webView.isInitialized) {
                             webView.evaluateJavascript(js, null)
                         }
