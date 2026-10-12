@@ -279,22 +279,14 @@ function setup2(candles, direction) {
     rule1 =
       isBullish(preC1) &&
       isBullish(c1) &&
-      isBearish(c2) &&
-      Number(c2.open) >=
-        Number(c1.close) &&
-      Number(c2.close) <=
-        Number(c1.open);
+      isBearishEngulfing(c1, c2);
   }
 
   if (direction === "BUY") {
     rule1 =
       isBearish(preC1) &&
       isBearish(c1) &&
-      isBullish(c2) &&
-      Number(c2.open) <=
-        Number(c1.close) &&
-      Number(c2.close) >=
-        Number(c1.open);
+      isBullishEngulfing(c1, c2);
   }
 
   let rule2 = false;
@@ -1350,11 +1342,8 @@ async function sendSignal(
     topic:
       TOPIC,
 
-    notification: {
-      title,
-      body
-    },
-
+    // Data-only FCM: Android service receives the signal even when app is backgrounded.
+    // SignalMessagingService builds the notification and persists the payload queue.
     data: {
       title,
       body,
@@ -1405,25 +1394,8 @@ async function sendSignal(
     },
 
     android: {
-      priority:
-        "high",
-
-      ttl:
-        60 * 1000,
-
-      notification: {
-        channelId:
-          "sebu_signal_channel_v2",
-
-        sound:
-          "default",
-
-        defaultSound:
-          true,
-
-        defaultVibrateTimings:
-          true
-      }
+      priority: "high",
+      ttl: 60 * 1000
     }
   };
 
