@@ -9,9 +9,13 @@ const COLLECTION = "sent_signals";
 
 function initializeFirebase() {
   const raw = process.env.FIREBASE_SERVICE_ACCOUNT;
-  if (!raw) throw new Error("Secret FIREBASE_SERVICE_ACCOUNT belum ditemukan.");
+
+  if (!raw) {
+    throw new Error("Secret FIREBASE_SERVICE_ACCOUNT belum ditemukan.");
+  }
 
   let serviceAccount;
+
   try {
     serviceAccount = JSON.parse(raw);
   } catch {
@@ -23,33 +27,84 @@ function initializeFirebase() {
   }
 }
 
-function normalizeTime(value) {
-  if (value === null || value === undefined) return NaN;
+/* Mengenali format timeframe dari dokumen signal. */
+function normalizeTimeframe(doc) {
+  const raw = String(
+    doc.timeframe ??
+    doc.timeFrame ??
+    doc.tf ??
+    ""
+  ).trim().toUpperCase();
 
-  if (typeof value === "number" || /^\d+(\.\d+)?$/.test(String(value))) {
+  const aliases = {
+    "30": "M30",
+    "30M": "M30",
+    "M30": "M30",
+    "15": "M15",
+    "15M": "M15",
+    "M15": "M15",
+    "5": "M5",
+    "5M": "M5",
+    "M5": "M5"
+  };
+
+  if (aliases[raw]) {
+    return aliases[raw];
+  }
+
+  const minutes = Number(doc.timeframeMinutes);
+
+  if (minutes === 30) return "M30";
+  if (minutes === 15) return "M15";
+  if (minutes === 5) return "M5";
+
+  return "";
+}
+
+function normalizeTime(value) {
+  if (value === null || value === undefined) {
+    return NaN;
+  }
+
+  if (
+    typeof value === "number" ||
+    /^\d+(\.\d+)?$/.test(String(value))
+  ) {
     const n = Number(value);
     return n > 9999999999 ? n : n * 1000;
   }
 
   const parsed = Date.parse(String(value));
+
   return Number.isFinite(parsed) ? parsed : NaN;
 }
 
 function normalizeCandles(payload) {
   let bars = [];
 
-  if (Array.isArray(payload)) bars = payload;
-  else if (Array.isArray(payload?.bars)) bars = payload.bars;
-  else if (Array.isArray(payload?.values)) bars = payload.values;
-  else if (Array.isArray(payload?.data)) bars = payload.data;
-  else if (Array.isArray(payload?.result)) bars = payload.result;
-  else if (Array.isArray(payload?.result?.bars)) bars = payload.result.bars;
+  if (Array.isArray(payload)) {
+    bars = payload;
+  } else if (Array.isArray(payload?.bars)) {
+    bars = payload.bars;
+  } else if (Array.isArray(payload?.values)) {
+    bars = payload.values;
+  } else if (Array.isArray(payload?.data)) {
+    bars = payload.data;
+  } else if (Array.isArray(payload?.result)) {
+    bars = payload.result;
+  } else if (Array.isArray(payload?.result?.bars)) {
+    bars = payload.result.bars;
+  }
 
   const sorted = bars
     .map(c => ({
       time: normalizeTime(
-        c?.openTime ?? c?.open_time ?? c?.datetime ??
-        c?.time ?? c?.timestamp ?? c?.t
+        c?.openTime ??
+        c?.open_time ??
+        c?.datetime ??
+        c?.time ??
+        c?.timestamp ??
+        c?.t
       ),
       high: Number(c?.high ?? c?.h),
       low: Number(c?.low ?? c?.l)
@@ -68,7 +123,13 @@ function normalizeCandles(payload) {
 
 async function fetchClosedCandles(timeframe, now) {
   const minutes = TF_MINUTES[timeframe];
-  const url = `${CANDLE_API_URL}?interval=${minutes}m&limit=80`;
+
+  if (!minutes) {
+    throw new Error(`Timeframe tidak didukung: ${timeframe}`);
+  }
+
+  const url =
+    `${CANDLE_API_URL}?interval=${minutes}m&limit=80`;
 
   const response = await fetch(url, {
     headers: { accept: "application/json" },
@@ -76,31 +137,36 @@ async function fetchClosedCandles(timeframe, now) {
   });
 
   if (!response.ok) {
-    throw new Error(`BiQuote ${timeframe} HTTP ${response.status}`);
+    throw new Error(
+      `BiQuote ${timeframe} HTTP ${response.status}`
+    );
   }
 
   const candles = normalizeCandles(await response.json());
   const tfMs = minutes * 60 * 1000;
 
   return candles.filter(c =>
-    c.time % tfMs === 0 && c.time + tfMs <= now
+    c.time % tfMs === 0 &&
+    c.time + tfMs <= now
   );
 }
 
 /*
  * Memantau candle yang sudah ditutup pada timeframe signal.
  * Jika Entry dan TP/SL tersentuh dalam candle yang sama,
- * urutannya tidak diketahui dari data OHLC sehingga tidak ditebak.
+ * urutannya tidak diketahui dari OHLC sehingga tidak ditebak.
  */
 function evaluateSignal(doc, candles, now) {
-  const timeframe = String(doc.timeframe || "").toUpperCase();
-  const tfMinutes = Number(
-    doc.timeframeMinutes || TF_MINUTES[timeframe]
-  );
+  const timeframe = normalizeTimeframe(doc);
+  const tfMinutes = TF_MINUTES[timeframe];
   const tfMs = tfMinutes * 60 * 1000;
-  const signalTime = Number(doc.candleTime);
-  const signalClose =
-    Number(doc.candleCloseTime) || signalTime + tfMs;
+
+  const signalTime = normalizeTime(doc.candleTime);
+
+  const savedClose = normalizeTime(doc.candleCloseTime);
+  const signalClose = Number.isFinite(savedClose)
+    ? savedClose
+    : signalTime + tfMs;
 
   const entry = Number(doc.entry);
   const sl = Number(doc.sl);
@@ -108,15 +174,27 @@ function evaluateSignal(doc, candles, now) {
   const type = String(doc.type || "").toUpperCase();
 
   if (
-    !TF_MINUTES[timeframe] ||
+    !timeframe ||
     !["BUY", "SELL"].includes(type) ||
-    ![entry, sl, tp, signalTime, signalClose].every(Number.isFinite)
+    ![
+      entry,
+      sl,
+      tp,
+      signalTime,
+      signalClose
+    ].every(Number.isFinite)
   ) {
     return null;
   }
 
   let entryTouched = Boolean(doc.entryTouched);
-  let entryTouchedAt = Number(doc.entryTouchedAt) || null;
+  let entryTouchedAt =
+    normalizeTime(doc.entryTouchedAt);
+
+  if (!Number.isFinite(entryTouchedAt)) {
+    entryTouchedAt = null;
+  }
+
   const startTime = entryTouchedAt || signalClose;
 
   const relevant = candles.filter(c =>
@@ -140,8 +218,11 @@ function evaluateSignal(doc, candles, now) {
       continue;
     }
 
-    // Gunakan candle setelah candle Entry pertama tercatat.
-    if (entryTouchedAt && candle.time < entryTouchedAt) {
+    // Jangan menggunakan candle Entry yang sama untuk TP/SL.
+    if (
+      entryTouchedAt &&
+      candle.time < entryTouchedAt
+    ) {
       continue;
     }
 
@@ -183,32 +264,40 @@ function evaluateSignal(doc, candles, now) {
     }
   }
 
-  return { entryTouched, entryTouchedAt };
+  return {
+    entryTouched,
+    entryTouchedAt
+  };
 }
 
-async function publishStatus(doc, documentId, status, result) {
+async function publishStatus(
+  doc,
+  documentId,
+  status,
+  result
+) {
   const setup = String(doc.setupNumber ?? "");
-  const timeframe = String(doc.timeframe || "").toUpperCase();
+  const timeframe = normalizeTimeframe(doc);
 
   const payload = {
     event: "STATUS_UPDATE",
     title: "SEBU DOLLAR AI — STATUS SIGNAL",
     body: `Setup ${setup} ${timeframe}: ${status}`,
     status,
-    type: String(doc.type),
+    type: String(doc.type || "").toUpperCase(),
     timeframe,
-    timeframeMinutes: String(
-      doc.timeframeMinutes || TF_MINUTES[timeframe]
-    ),
+    timeframeMinutes: String(TF_MINUTES[timeframe]),
     setup,
     setupNumber: setup,
-    candleTime: String(doc.candleTime),
-    candleCloseTime: String(doc.candleCloseTime || ""),
+    candleTime: String(doc.candleTime ?? ""),
+    candleCloseTime: String(
+      doc.candleCloseTime ?? ""
+    ),
     closePrice: String(result.closePrice ?? ""),
     closedAt: String(result.closedAt ?? "")
   };
 
-  // Kirim update terlebih dahulu.
+  // Kirim update FCM terlebih dahulu.
   await getMessaging().send({
     topic: TOPIC,
     data: payload,
@@ -218,7 +307,7 @@ async function publishStatus(doc, documentId, status, result) {
     }
   });
 
-  // Ubah status final setelah FCM menerima pesan.
+  // Simpan status akhir setelah FCM menerima pesan.
   await getFirestore()
     .collection(COLLECTION)
     .doc(documentId)
@@ -232,20 +321,25 @@ async function publishStatus(doc, documentId, status, result) {
       statusUpdatedAt: new Date().toISOString()
     });
 
-  console.log(`STATUS ${documentId}: ${status} + FCM broadcast OK`);
+  console.log(
+    `STATUS ${documentId}: ${status} + FCM broadcast OK`
+  );
 }
 
 async function main() {
   initializeFirebase();
 
   const db = getFirestore();
+
   const snapshot = await db
     .collection(COLLECTION)
     .where("status", "==", "SENT")
     .get();
 
   if (snapshot.empty) {
-    console.log("Tidak ada signal SENT yang perlu dipantau.");
+    console.log(
+      "Tidak ada signal SENT yang perlu dipantau."
+    );
     return;
   }
 
@@ -254,10 +348,14 @@ async function main() {
 
   for (const item of snapshot.docs) {
     const doc = item.data();
-    const timeframe = String(doc.timeframe || "").toUpperCase();
+    const timeframe = normalizeTimeframe(doc);
 
-    if (!TF_MINUTES[timeframe]) {
-      console.warn(`Lewati ${item.id}: timeframe tidak dikenal.`);
+    if (!timeframe) {
+      console.warn(
+        `Lewati ${item.id}: timeframe tidak dikenal. ` +
+        `timeframe=${doc.timeframe}, ` +
+        `timeframeMinutes=${doc.timeframeMinutes}`
+      );
       continue;
     }
 
@@ -275,7 +373,12 @@ async function main() {
         now
       );
 
-      if (!result) continue;
+      if (!result) {
+        console.warn(
+          `Lewati ${item.id}: data signal tidak lengkap atau tidak valid.`
+        );
+        continue;
+      }
 
       const update = {
         entryTouched: Boolean(result.entryTouched),
@@ -288,17 +391,32 @@ async function main() {
           "TP dan SL sama-sama tersentuh pada satu candle; status tidak ditebak.";
 
         await item.ref.update(update);
-        console.warn(`AMBIGUOUS ${item.id}: status tidak ditebak.`);
+
+        console.warn(
+          `AMBIGUOUS ${item.id}: status tidak ditebak.`
+        );
+
         continue;
       }
 
       if (result.status) {
         await item.ref.update(update);
-        await publishStatus(doc, item.id, result.status, result);
-      } else if (result.entryTouched && !doc.entryTouched) {
+
+        await publishStatus(
+          doc,
+          item.id,
+          result.status,
+          result
+        );
+      } else if (
+        result.entryTouched &&
+        !doc.entryTouched
+      ) {
         await item.ref.update(update);
+
         console.log(
-          `ENTRY TERSENTUH ${item.id}; lanjut pantau candle berikutnya.`
+          `ENTRY TERSENTUH ${item.id}; ` +
+          `lanjut pantau candle berikutnya.`
         );
       }
     } catch (error) {
@@ -308,6 +426,8 @@ async function main() {
       );
     }
   }
+
+  console.log("Status monitor selesai.");
 }
 
 main()
