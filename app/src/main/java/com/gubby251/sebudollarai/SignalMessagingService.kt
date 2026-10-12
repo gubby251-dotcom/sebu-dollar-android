@@ -27,7 +27,7 @@ class SignalMessagingService : FirebaseMessagingService() {
             "sebu_signal_users"
 
         private const val CHANNEL_ID =
-            "sebu_signal_channel_v2"
+            "sebu_signal_channel_v3"
     }
 
 
@@ -63,7 +63,6 @@ class SignalMessagingService : FirebaseMessagingService() {
         if (message.data.isNotEmpty()) {
 
             MainActivity.receiveNativeSignal(
-                applicationContext,
                 message.data
             )
         }
@@ -257,8 +256,8 @@ class SignalMessagingService : FirebaseMessagingService() {
 
 
         /*
-         * Jangan membuat channel baru.
-         * Tetap gunakan channel v2 yang sekarang.
+         * Use a new channel ID so Android can expose configurable sound
+         * for upgrades; existing channel settings are immutable by design.
          */
         val existing =
             manager.getNotificationChannel(
