@@ -1869,7 +1869,18 @@ loadHistoryClearBoundary();
   A signal is identified by its M30 candle CLOSE time, so only
   signals closing after this moment may enter the new History.
 */
-saveHistoryClearBoundary(Date.now());
+const clearBoundary=Date.now();
+saveHistoryClearBoundary(clearBoundary);
+
+/* Persist the boundary outside WebView localStorage so Firestore sync
+   cannot restore older signals after the app is restarted. */
+try{
+  if(window.SEBUHistory && typeof window.SEBUHistory.saveHistoryClearBoundary==="function"){
+    window.SEBUHistory.saveHistoryClearBoundary(clearBoundary);
+  }
+}catch(e){
+  console.warn("Could not persist History clear boundary to Android:",e);
+}
 
 signalHistory=[];
 
@@ -1960,16 +1971,21 @@ function mergeFirestoreSignalHistory(payload){
         Number(serverHistoryBoundaryCloseTime)||0
       );
       if(Number.isFinite(closeTime) && closeTime<=effectiveBoundary) continue;
-      const rawStatus=String(row.status||"SENT").toUpperCase();
-      const status=["HIT TP","HIT SL"].includes(rawStatus)?rawStatus:"PENDING";
+      const rawStatus=String(row.resultStatus||row.status||"SENT").toUpperCase();
       const key=getSignalHistorySyncKey({setupNumber,timeframeMinutes,type,candleTime});
       const previous=byKey.get(key);
+      /* Never downgrade a completed local result when the server row is stale. */
+      const status=["HIT TP","HIT SL"].includes(rawStatus)
+        ? rawStatus
+        : (["HIT TP","HIT SL"].includes(String(previous?.status||"").toUpperCase())
+            ? String(previous.status).toUpperCase()
+            : "PENDING");
       const closeDate=new Date(closeTime);
       const record={
         ...(previous||{}),
         time:closeDate.toLocaleTimeString("id-ID",{hour:"2-digit",minute:"2-digit"}),
         type,entry,sl,tp,status,
-        entryTouched:Boolean(row.entryTouched||previous?.entryTouched),
+        entryTouched:Boolean(row.entryTouched||previous?.entryTouched||["HIT TP","HIT SL"].includes(status)),
         entryTouchedAt:Number(row.entryTouchedAt||previous?.entryTouchedAt)||null,
         pips:Math.abs(entry-sl),candleTime,candleCloseTime:closeTime,
         timeframeMinutes,timeframe,setupNumber,
