@@ -9,6 +9,7 @@ import android.os.Build
 import android.os.Bundle
 import android.text.InputType
 import android.view.Gravity
+import android.webkit.JavascriptInterface
 import android.webkit.WebChromeClient
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -796,6 +797,11 @@ class MainActivity : AppCompatActivity() {
             }
 
 
+        webView.addJavascriptInterface(
+            HistoryBridge(),
+            "SEBUHistory"
+        )
+
         webView.webChromeClient =
             WebChromeClient()
 
@@ -803,6 +809,52 @@ class MainActivity : AppCompatActivity() {
         webView.loadUrl(
             "file:///android_asset/index.html"
         )
+    }
+
+
+    /**
+     * Persist the CLEAR HISTORY timestamp in Firestore. This bridge is
+     * limited to history cleanup and does not change scanner signal logic.
+     */
+    private inner class HistoryBridge {
+        @JavascriptInterface
+        fun saveHistoryClearBoundary(boundaryMs: Long) {
+            val uid = FirebaseAuth.getInstance().currentUser?.uid ?: return
+            val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
+            val stateRef = FirebaseFirestore.getInstance()
+                .collection("history_state")
+                .document(uid)
+
+            stateRef.get(Source.SERVER)
+                .addOnSuccessListener { doc ->
+                    val nextBoundary = maxOf(
+                        boundaryMs,
+                        doc.getLong("boundaryMs") ?: 0L
+                    )
+                    stateRef.set(
+                        mapOf("boundaryMs" to nextBoundary),
+                        com.google.firebase.firestore.SetOptions.merge()
+                    ).addOnSuccessListener {
+                        prefs.edit()
+                            .putBoolean("history_boundary_initialized_$uid", true)
+                            .putLong("history_boundary_ms_$uid", nextBoundary)
+                            .apply()
+                        runOnUiThread {
+                            if (::webView.isInitialized) {
+                                webView.evaluateJavascript(
+                                    "if(window.setServerHistoryBoundary) window.setServerHistoryBoundary($nextBoundary);",
+                                    null
+                                )
+                            }
+                        }
+                    }.addOnFailureListener { error ->
+                        android.util.Log.e("SEBU_HISTORY", "Failed to persist CLEAR HISTORY boundary", error)
+                    }
+                }
+                .addOnFailureListener { error ->
+                    android.util.Log.e("SEBU_HISTORY", "Failed to read CLEAR HISTORY boundary", error)
+                }
+        }
     }
 
 
