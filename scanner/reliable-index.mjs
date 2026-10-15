@@ -5,20 +5,21 @@ import { getFirestore } from "firebase-admin/firestore";
 /*
 =========================================================
 SEBU DOLLAR AI — RELIABLE SCANNER
-SETUP 1 / 2 / 3 = M30
-SETUP 4          = M15
-SETUP 5          = M5
+SETUP 1 = M30 reversal confirmation (same candle, entry, SL, and TP rules as retained M15 reversal setup)
+SETUP 2 = M30 continuation (retained original continuation logic)
+SETUP 3 = M15 reversal confirmation (same candle, entry, SL, and TP rules as retained M15 reversal setup)
+No M5 setup is scanned.
 
 ENTRY:
   50% BODY C2
 
-M30 SL:
-  BUY  = lowest wick C1/C2
-  SELL = highest wick C1/C2
-
-M15/M5 SL:
+SETUP 1 / 3 SL:
   BUY  = lowest wick C1 and candle immediately before C1
   SELL = highest wick C1 and candle immediately before C1
+
+SETUP 2 CONTINUATION SL:
+  BUY  = lowest wick C1/C2
+  SELL = highest wick C1/C2
 
 TP:
   RR 1:1
@@ -45,11 +46,7 @@ const TF = {
     stateDocument: "xauusd_m15"
   },
 
-  M5: {
-    minutes: 5,
-    interval: "5m",
-    stateDocument: "xauusd_m5"
-  }
+
 };
 
 const STATE_COLLECTION = "signal_scanner_state";
@@ -219,135 +216,10 @@ function isBearishEngulfing(c1, c2) {
 }
 
 /* =======================================================
-   SETUP 1 — M30
+   SETUP 2 — M30 CONTINUATION
 ======================================================= */
 
-function setup1(candles, direction) {
-  const n = candles.length;
-
-  const required =
-    direction === "BUY"
-      ? "bearish"
-      : "bullish";
-
-  let count = 0;
-
-  for (
-    let i = n - 3;
-    i >= 0;
-    i--
-  ) {
-    const valid =
-      required === "bearish"
-        ? isBearish(candles[i])
-        : isBullish(candles[i]);
-
-    if (!valid) break;
-
-    count++;
-  }
-
-  return count >= 2;
-}
-
-/* =======================================================
-   SETUP 2 — M30
-   RULE 1 OR RULE 2
-======================================================= */
-
-function setup2(candles, direction) {
-  const n = candles.length;
-
-  if (n < 6) return false;
-
-  const preC1Index = n - 3;
-  const c1Index = n - 2;
-  const c2Index = n - 1;
-
-  const preC1 =
-    candles[preC1Index];
-
-  const c1 =
-    candles[c1Index];
-
-  const c2 =
-    candles[c2Index];
-
-  let rule1 = false;
-
-  if (direction === "SELL") {
-    rule1 =
-      isBullish(preC1) &&
-      isBullish(c1) &&
-      isBearishEngulfing(c1, c2);
-  }
-
-  if (direction === "BUY") {
-    rule1 =
-      isBearish(preC1) &&
-      isBearish(c1) &&
-      isBullishEngulfing(c1, c2);
-  }
-
-  let rule2 = false;
-
-  if (n >= 15) {
-    const previous12 =
-      candles.slice(
-        c1Index - 12,
-        c1Index
-      );
-
-    if (previous12.length === 12) {
-
-      if (direction === "SELL") {
-        const previousPeak =
-          Math.max(
-            ...previous12.map(
-              (x) => Number(x.high)
-            )
-          );
-
-        rule2 =
-          isBearish(preC1) &&
-          isBullish(c1) &&
-          Number(c1.high) >
-            previousPeak &&
-          isBearishEngulfing(
-            c1,
-            c2
-          );
-      }
-
-      if (direction === "BUY") {
-        const previousTrough =
-          Math.min(
-            ...previous12.map(
-              (x) => Number(x.low)
-            )
-          );
-
-        rule2 =
-          isBullish(preC1) &&
-          isBearish(c1) &&
-          Number(c1.low) <
-            previousTrough &&
-          isBullishEngulfing(
-            c1,
-            c2
-          );
-      }
-    }
-  }
-
-  return rule1 || rule2;
-}
-
-/* =======================================================
-   SETUP 3 — M30
-======================================================= */
-
-function setup3(candles, direction) {
+function isContinuationPattern(candles, direction) {
   const n = candles.length;
 
   if (n < 7) return false;
@@ -409,46 +281,17 @@ function setup3(candles, direction) {
 }
 
 /* =======================================================
-   M30 SETUP PRIORITY
+   M30 SETUP 2 CONTINUATION
 ======================================================= */
 
 function detectMarketSetup(
   candles,
   direction
 ) {
-  if (
-    setup3(
-      candles,
-      direction
-    )
-  ) {
-    return {
-      number: 3,
-      name: "CONTINUATION"
-    };
-  }
-
-  if (
-    setup1(
-      candles,
-      direction
-    )
-  ) {
-    return {
-      number: 1,
-      name: "REVERSAL BERURUTAN"
-    };
-  }
-
-  if (
-    setup2(
-      candles,
-      direction
-    )
-  ) {
+  if (isContinuationPattern(candles, direction)) {
     return {
       number: 2,
-      name: "REVERSAL PULLBACK"
+      name: "CONTINUATION"
     };
   }
 
@@ -479,10 +322,10 @@ function entry50Body(c2) {
 }
 
 /* =======================================================
-   M30 — SETUP 1/2/3
+   M30 — SETUP 1/2
 ======================================================= */
 
-function evaluateM30(
+function evaluateM30Continuation(
   candles,
   now
 ) {
@@ -599,196 +442,31 @@ function evaluateM30(
 }
 
 /* =======================================================
-   SETUP 4 — M15 — ATURAN BARU
+   M30 — SETUP 1 REVERSAL + SETUP 2 CONTINUATION
 ======================================================= */
 
-function evaluateSetup4M15(
-  candles,
-  now
-) {
-  const c =
-    Array.isArray(candles)
-      ? candles
-          .filter((x) =>
-            x &&
-            [
-              x.time,
-              x.open,
-              x.high,
-              x.low,
-              x.close
-            ].every(
-              (v) =>
-                Number.isFinite(
-                  Number(v)
-                )
-            )
-          )
-          .sort(
-            (a, b) =>
-              Number(a.time) -
-              Number(b.time)
-          )
-      : [];
+function evaluateM30(candles, now) {
+  const setup1Signal = evaluateReversalSetup(
+    candles,
+    now,
+    "M30",
+    1
+  );
 
-  if (c.length < 4) {
-    return null;
-  }
+  if (setup1Signal) return setup1Signal;
 
-  const c2 =
-    c[c.length - 1];
-
-  const c1 =
-    c[c.length - 2];
-
-  const beforeC1 =
-    c[c.length - 3];
-
-  const beforeBeforeC1 =
-    c[c.length - 4];
-
-  const tfMs =
-    TF.M15.minutes *
-    60 *
-    1000;
-
-  const c2Time =
-    Number(c2.time);
-
-  if (
-    !Number.isFinite(c2Time) ||
-    c2Time % tfMs !== 0 ||
-    c2Time + tfMs > now
-  ) {
-    return null;
-  }
-
-  /*
-  BUY:
-  - Minimal 2 candle bearish sebelum C1
-  - C1 bullish menembus HIGH/WICK beforeC1
-  - Body + CLOSE C1 di atas HIGH beforeC1
-  - C2 bullish menembus HIGH/WICK C1
-  - Body + CLOSE C2 di atas HIGH C1
-
-  SELL = kebalikannya.
-  */
-
-  const twoBeforeBearish =
-    isBearish(beforeC1) &&
-    isBearish(beforeBeforeC1);
-
-  const twoBeforeBullish =
-    isBullish(beforeC1) &&
-    isBullish(beforeBeforeC1);
-
-  const c1BuyBreaksPreviousHigh =
-    isBullish(c1) &&
-    Number(c1.open) <=
-      Number(beforeC1.high) &&
-    Number(c1.close) >
-      Number(beforeC1.high);
-
-  const c1SellBreaksPreviousLow =
-    isBearish(c1) &&
-    Number(c1.open) >=
-      Number(beforeC1.low) &&
-    Number(c1.close) <
-      Number(beforeC1.low);
-
-  const c2BuyBodyBreaksC1High =
-    isBullish(c2) &&
-    Number(c2.open) <=
-      Number(c1.high) &&
-    Number(c2.close) >
-      Number(c1.high);
-
-  const c2SellBodyBreaksC1Low =
-    isBearish(c2) &&
-    Number(c2.open) >=
-      Number(c1.low) &&
-    Number(c2.close) <
-      Number(c1.low);
-
-  const buy =
-    twoBeforeBearish &&
-    c1BuyBreaksPreviousHigh &&
-    c2BuyBodyBreaksC1High;
-
-  const sell =
-    twoBeforeBullish &&
-    c1SellBreaksPreviousLow &&
-    c2SellBodyBreaksC1Low;
-
-  if (!buy && !sell) {
-    return null;
-  }
-
-  const type =
-    buy
-      ? "BUY"
-      : "SELL";
-
-  const entry =
-    entry50Body(c2);
-
-  const sl =
-    type === "BUY"
-      ? Math.min(
-          Number(c1.low),
-          Number(beforeC1.low)
-        )
-      : Math.max(
-          Number(c1.high),
-          Number(beforeC1.high)
-        );
-
-  const risk =
-    Math.abs(
-      entry - sl
-    );
-
-  if (
-    !(risk > 0) ||
-    !Number.isFinite(entry) ||
-    !Number.isFinite(sl)
-  ) {
-    return null;
-  }
-
-  const tp =
-    type === "BUY"
-      ? entry + risk
-      : entry - risk;
-
-  return {
-    type,
-    entry,
-    sl,
-    tp,
-    riskDistance: risk,
-    candleTime: c2Time,
-    candleCloseTime:
-      c2Time + tfMs,
-    setupNumber: 4,
-    setupName:
-      "M15 REVERSAL CONFIRMATION",
-    timeframe: "M15",
-    timeframeMinutes: 15,
-    trendText:
-      "SETUP 4 — M15 CONFIRMATION",
-    engulfText:
-      "M15 CONFIRMED"
-  };
+  return evaluateM30Continuation(candles, now);
 }
 
 /* =======================================================
-   SETUP 5 — M5 — ATURAN BARU
+   REVERSAL SETUP — SHARED RULES FOR SETUP 1 M30 AND SETUP 3 M15
 ======================================================= */
 
-function evaluateSetup5M5(
+function evaluateReversalSetup(
   candles,
-  now
+  now,
+  timeframe = "M15",
+  setupNumber = 3
 ) {
   const c =
     Array.isArray(candles)
@@ -832,7 +510,7 @@ function evaluateSetup5M5(
     c[c.length - 4];
 
   const tfMs =
-    TF.M5.minutes *
+    TF[timeframe].minutes *
     60 *
     1000;
 
@@ -954,15 +632,17 @@ function evaluateSetup5M5(
     candleTime: c2Time,
     candleCloseTime:
       c2Time + tfMs,
-    setupNumber: 5,
+    setupNumber,
     setupName:
-      "M5 REVERSAL CONFIRMATION",
-    timeframe: "M5",
-    timeframeMinutes: 5,
+      timeframe === "M30"
+        ? "M30 REVERSAL CONFIRMATION"
+        : "M15 REVERSAL CONFIRMATION",
+    timeframe,
+    timeframeMinutes: TF[timeframe].minutes,
     trendText:
-      "SETUP 5 — M5 CONFIRMATION",
+      `SETUP ${setupNumber} — ${timeframe} CONFIRMATION`,
     engulfText:
-      "M5 CONFIRMED"
+      `${timeframe} CONFIRMED`
   };
 }
 
@@ -1465,7 +1145,7 @@ function findM30Signals(
 }
 
 /* =======================================================
-   FIND M15 SIGNALS
+   FIND SETUP 3 — M15 SIGNALS
 ======================================================= */
 
 function findM15Signals(
@@ -1487,51 +1167,11 @@ function findM15Signals(
       );
 
     const candidate =
-      evaluateSetup4M15(
+      evaluateReversalSetup(
         current,
-        now
-      );
-
-    if (
-      candidate &&
-      candidate.candleTime >
-        previous
-    ) {
-      signals.push(
-        candidate
-      );
-    }
-  }
-
-  return signals;
-}
-
-/* =======================================================
-   FIND M5 SIGNALS
-======================================================= */
-
-function findM5Signals(
-  closedCandles,
-  previous,
-  now
-) {
-  const signals = [];
-
-  for (
-    let i = 3;
-    i < closedCandles.length;
-    i++
-  ) {
-    const current =
-      closedCandles.slice(
-        0,
-        i + 1
-      );
-
-    const candidate =
-      evaluateSetup5M5(
-        current,
-        now
+        now,
+        "M15",
+        3
       );
 
     if (
@@ -1704,17 +1344,6 @@ async function scanTimeframe(
       );
   }
 
-  if (
-    timeframe === "M5"
-  ) {
-    signals =
-      findM5Signals(
-        closedCandles,
-        previous,
-        now
-      );
-  }
-
   signals =
     uniqueSignals(
       signals
@@ -1782,11 +1411,11 @@ async function main() {
   );
 
   console.log(
-    "RELIABLE SCANNER — SETUP 1/2/3/4/5"
+    "RELIABLE SCANNER — SETUP 1/2/3"
   );
 
   console.log(
-    "M30 + M15 + M5"
+    "M30 + M15"
   );
 
   console.log(
@@ -1808,17 +1437,12 @@ async function main() {
     now
   );
 
-  await scanTimeframe(
-    "M5",
-    now
-  );
-
   console.log(
     "========================================"
   );
 
   console.log(
-    "RELIABLE SCANNER SETUP 1/2/3/4/5 SELESAI"
+    "RELIABLE SCANNER SETUP 1/2/3 SELESAI"
   );
 
   console.log(
