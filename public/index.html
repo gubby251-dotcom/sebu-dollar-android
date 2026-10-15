@@ -2402,10 +2402,9 @@ function getClosedCandles(candles){
   return candles.filter(c=>{
     const t=Number(c.time);
     if(!Number.isFinite(t)) return false;
-    /* IMPORTANT: provider isOpen flags are advisory only. Some feeds keep
-       the last bar flagged as open even after its OHLC period has ended.
-       The M30 timestamp + 30-minute duration is the authoritative close
-       gate. This prevents a valid C2 from being discarded after close. */
+    /* Provider isOpen flags are advisory only. Require a real M30 boundary
+       and the full candle interval to have elapsed, matching server scanner. */
+    if(t % tfMs !== 0) return false;
     return (t+tfMs)<=now;
   }).sort((a,b)=>Number(a.time)-Number(b.time));
 }
@@ -2504,12 +2503,22 @@ function setup1(c,dir){
 }
 
 function setup2(c,dir){
-  /* Setup 2 is the only active M30 continuation pattern. */
+  /* Setup 2 M30 continuation — kept identical to scanner/reliable-index.mjs.
+     Two candles in the prior trend, then two pullback candles, then C2
+     engulfs C1 in the continuation direction. */
   const n=c.length;
   if(n<7) return false;
   const c2=c[n-1], c1=c[n-2], p1=c[n-3], t1=c[n-4], t2=c[n-5];
-  if(dir==='BUY') return isBearish(p1)&&isBearish(c1)&&isBullish(t1)&&isBullish(t2)&&isBullishEngulfing(c1,c2);
-  return isBullish(p1)&&isBullish(c1)&&isBearish(t1)&&isBearish(t2)&&isBearishEngulfing(c1,c2);
+
+  if(dir==='BUY'){
+    return isBullish(t2)&&isBullish(t1)&&
+      isBearish(p1)&&isBearish(c1)&&
+      isBullishEngulfing(c1,c2);
+  }
+
+  return isBearish(t2)&&isBearish(t1)&&
+    isBullish(p1)&&isBullish(c1)&&
+    isBearishEngulfing(c1,c2);
 }
 
 /*
@@ -2652,8 +2661,17 @@ function evaluateFourRules(candles){
   const bodyLow=Math.min(Number(c2.open),Number(c2.close));
   const bodyHigh=Math.max(Number(c2.open),Number(c2.close));
   const entry=bodyLow+(bodyHigh-bodyLow)/2;
+  /* Setup 1 M30 reversal uses C1 and before-C1.
+     Setup 2 M30 continuation retains its C1/C2 wick-extreme SL.
+     Setup 3 M15 reversal uses C1 and before-C1 in evaluateSetup3M15(). */
   const beforeC1=c[c.length-3];
-  const sl=type==='BUY'?Math.min(Number(c1.low),Number(beforeC1.low)):Math.max(Number(c1.high),Number(beforeC1.high));
+  const sl=setup.number===2
+    ? (type==='BUY'
+        ? Math.min(Number(c1.low),Number(c2.low))
+        : Math.max(Number(c1.high),Number(c2.high)))
+    : (type==='BUY'
+        ? Math.min(Number(c1.low),Number(beforeC1.low))
+        : Math.max(Number(c1.high),Number(beforeC1.high)));
   const risk=Math.abs(entry-sl);
   if(!(risk>0)||!Number.isFinite(entry)||!Number.isFinite(sl)) return null;
   const tp=type==='BUY'?entry+risk:entry-risk;
@@ -3452,12 +3470,12 @@ async function checkPendingSignals(candleData=null){
 
   if(Number.isFinite(tickMid) && tickMid>0 && tickAge<=LIVE_MAX_AGE_MS){
     livePrice=tickMid;
-    processPendingSignalsAtPrice(livePrice,[1,2,3,4,5]);
+    processPendingSignalsAtPrice(livePrice,[1,2,3]);
   }else{
     const price=await getLiveMarketPrice();
     if(Number.isFinite(price)){
       livePrice=price;
-      processPendingSignalsAtPrice(livePrice,[1,2,3,4,5]);
+      processPendingSignalsAtPrice(livePrice,[1,2,3]);
     }
   }
 
@@ -3537,13 +3555,22 @@ async function scanSetup3M15(){
 
   const newestTime=Number(closedM15[closedM15.length-1].time)||0;
   const previousTime=Number(setup3M15LastScannedCandleTime)||0;
+  const clearBoundary=Math.max(
+    Number(historyClearBoundaryCloseTime)||0,
+    Number(serverHistoryBoundaryCloseTime)||0
+  );
+  const allowedAfterClear=candidate=>{
+    const candleClose=Number(candidate?.candleCloseTime)||
+      (Number(candidate?.candleTime)+SETUP3_TIMEFRAME_MINUTES*60*1000);
+    return !clearBoundary || candleClose>clearBoundary;
+  };
 
   if(previousTime===0){
     const first=evaluateSetup3M15(closedM15);
-    if(first){
+    if(first && allowedAfterClear(first)){
       const exists=signalHistory.some(s=>
         s&&s.type===first.type&&Number(s.candleTime)===Number(first.candleTime)&&
-        Number(s.setupNumber)===3
+        Number(s.setupNumber)===3&&Number(s.timeframeMinutes||15)===15
       );
       if(!exists) triggerValidSignal(first);
     }
@@ -3553,7 +3580,7 @@ async function scanSetup3M15(){
 
   if(newestTime>previousTime){
     const discovered=scanAllSetup3M15(closedM15,200)
-      .filter(candidate=>Number(candidate.candleTime)>previousTime);
+      .filter(candidate=>Number(candidate.candleTime)>previousTime && allowedAfterClear(candidate));
 
     for(const candidate of discovered){
       const exists=signalHistory.some(s=>
