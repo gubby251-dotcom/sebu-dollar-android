@@ -94,6 +94,37 @@ function normalizeCandles(payload) {
 }
 
 /* =======================================================
+   ACTIVE SETUP GUARD
+   Only Setup 1/2 on M30 and Setup 3 on M15 are active.
+   This guard runs before timeframe resolution so old documents
+   cannot be monitored just because they still contain M30/M15 metadata.
+======================================================= */
+
+function isActiveSetup(doc) {
+  const rawSetup = doc?.setupNumber ?? doc?.setup;
+  const setupNumber = Number(String(rawSetup ?? "").replace(/^SETUP\s*/i, "").trim());
+  const rawTimeframe = String(doc?.timeframe ?? "").trim().toUpperCase();
+  const minutes = Number(doc?.timeframeMinutes);
+
+  const timeframeFromMinutes = minutes === 30 ? "M30" : minutes === 15 ? "M15" : null;
+  const timeframeFromField = TF_MINUTES[rawTimeframe] ? rawTimeframe : null;
+
+  // Reject contradictory or explicitly unsupported timeframe metadata.
+  if (rawTimeframe && !timeframeFromField) return false;
+  if (Number.isFinite(minutes) && minutes > 0 && !timeframeFromMinutes) return false;
+  if (timeframeFromField && timeframeFromMinutes && timeframeFromField !== timeframeFromMinutes) return false;
+
+  const timeframe = timeframeFromField || timeframeFromMinutes;
+  if (setupNumber === 1 || setupNumber === 2) {
+    return !timeframe || timeframe === "M30";
+  }
+  if (setupNumber === 3) {
+    return !timeframe || timeframe === "M15";
+  }
+  return false;
+}
+
+/* =======================================================
    TIMEFRAME RESOLVER
 ======================================================= */
 
@@ -372,6 +403,15 @@ async function main() {
 
   for (const item of snapshot.docs) {
     const doc = item.data();
+
+    if (!isActiveSetup(doc)) {
+      console.warn(
+        `Lewati ${item.id}: setup lama/tidak aktif ` +
+        `(setup=${doc.setupNumber ?? doc.setup}, timeframe=${doc.timeframe}).`
+      );
+      continue;
+    }
+
     const timeframe = getTimeframe(doc, item.id);
 
     if (!timeframe) {
