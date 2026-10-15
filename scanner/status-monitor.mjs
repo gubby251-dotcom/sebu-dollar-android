@@ -5,7 +5,7 @@ import { getMessaging } from "firebase-admin/messaging";
 
 const CANDLE_API_URL = "https://biquote.io/api/XAUUSD/ohlc";
 const TOPIC = "sebu_signal_users";
-const TF_MINUTES = { M30: 30, M15: 15, M5: 5 };
+const TF_MINUTES = { M30: 30, M15: 15 };
 const COLLECTION = "sent_signals";
 
 function initializeFirebase() {
@@ -109,7 +109,7 @@ function getTimeframe(doc, documentId = "") {
   const idPrefix = String(documentId)
     .trim()
     .toUpperCase()
-    .match(/^(M30|M15|M5)_/);
+    .match(/^(M30|M15)_/);
 
   if (idPrefix && TF_MINUTES[idPrefix[1]]) {
     return idPrefix[1];
@@ -126,16 +126,15 @@ function getTimeframe(doc, documentId = "") {
 
   const setupNumber = Number(doc.setupNumber);
 
-  if ([1, 2, 3].includes(setupNumber)) {
+  // Fallback only when older documents lack timeframe metadata.
+  // Current active mapping: Setup 1/2 = M30, Setup 3 = M15.
+  // Legacy Setup 4/5 and M5 documents are not monitored as active signals.
+  if ([1, 2].includes(setupNumber)) {
     return "M30";
   }
 
-  if (setupNumber === 4) {
+  if (setupNumber === 3) {
     return "M15";
-  }
-
-  if (setupNumber === 5) {
-    return "M5";
   }
 
   return null;
