@@ -5,19 +5,19 @@ import { getFirestore } from "firebase-admin/firestore";
 /*
 =========================================================
 SEBU DOLLAR AI — RELIABLE SCANNER
-SETUP 1 = M30 reversal confirmation (same candle, entry, SL, and TP rules as retained M15 reversal setup)
+SETUP 1 = M30 reversal confirmation (same pattern/entry/TP as M15; M30-specific SL)
 SETUP 2 = M30 continuation (retained original continuation logic)
-SETUP 3 = M15 reversal confirmation (same candle, entry, SL, and TP rules as retained M15 reversal setup)
+SETUP 3 = M15 reversal confirmation (M15-specific SL)
 No M5 setup is scanned.
 
 ENTRY:
   50% BODY C2
 
-SETUP 1 / 3 SL:
+SETUP 1 M30 / SETUP 3 M15 REVERSAL SL:
   BUY  = lowest wick C1 and candle immediately before C1
   SELL = highest wick C1 and candle immediately before C1
 
-SETUP 2 CONTINUATION SL:
+SETUP 2 M30 CONTINUATION SL:
   BUY  = lowest wick C1/C2
   SELL = highest wick C1/C2
 
@@ -130,7 +130,10 @@ function normalizeCandles(payload) {
       Number.isFinite(c.open) &&
       Number.isFinite(c.high) &&
       Number.isFinite(c.low) &&
-      Number.isFinite(c.close)
+      Number.isFinite(c.close) &&
+      c.high >= Math.max(c.open, c.close) &&
+      c.low <= Math.min(c.open, c.close) &&
+      c.high >= c.low
     )
 
     .sort((a, b) => a.time - b.time);
@@ -594,16 +597,14 @@ function evaluateReversalSetup(
   const entry =
     entry50Body(c2);
 
+  /*
+    Setup 1 M30 and Setup 3 M15 use the same reversal SL rule:
+    extreme wick of C1 and the candle immediately before C1.
+  */
   const sl =
     type === "BUY"
-      ? Math.min(
-          Number(c1.low),
-          Number(beforeC1.low)
-        )
-      : Math.max(
-          Number(c1.high),
-          Number(beforeC1.high)
-        );
+      ? Math.min(Number(c1.low), Number(beforeC1.low))
+      : Math.max(Number(c1.high), Number(beforeC1.high));
 
   const risk =
     Math.abs(
@@ -731,23 +732,15 @@ function getClosedCandles(
 
   return candles
     .filter((c) => {
-      const t =
-        Number(c.time);
+      const t = Number(c.time);
 
-      if (!Number.isFinite(t)) {
-        return false;
-      }
+      if (!Number.isFinite(t)) return false;
 
-      if (
-        timeframe !== "M30" &&
-        t % tfMs !== 0
-      ) {
-        return false;
-      }
+      // All active timeframe candles must start on their exact interval boundary.
+      if (t % tfMs !== 0) return false;
 
-      return (
-        t + tfMs <= now
-      );
+      // A candle is usable only after its full interval has closed.
+      return t + tfMs <= now;
     })
     .sort(
       (a, b) =>
@@ -1114,7 +1107,9 @@ function findM30Signals(
   const signals = [];
 
   for (
-    let i = 4;
+    // Four candles are sufficient to evaluate Setup 1 reversal.
+    // Setup 2 continuation independently requires its longer pattern.
+    let i = 3;
     i < closedCandles.length;
     i++
   ) {
