@@ -248,10 +248,12 @@ function evaluateSignal(doc, candles, now, timeframe) {
     c.time + tfMs <= now
   );
 
+  let firstAmbiguousAt = null;
+
   for (const candle of relevant) {
-    const entryHit = type === "BUY"
-      ? candle.low <= entry
-      : candle.high >= entry;
+    // Confirm Entry only when the closed candle range actually contains it.
+    // A candle entirely beyond Entry cannot prove the Entry was traded.
+    const entryHit = candle.low <= entry && candle.high >= entry;
 
     if (!entryTouched) {
       if (entryHit) {
@@ -279,12 +281,10 @@ function evaluateSignal(doc, candles, now, timeframe) {
       : candle.high >= sl;
 
     if (hitTP && hitSL) {
-      return {
-        entryTouched,
-        entryTouchedAt,
-        ambiguous: true,
-        ambiguousAt: candle.time + tfMs
-      };
+      // Do not guess the order inside this candle. Remember the ambiguity,
+      // then continue: a later candle can establish the eventual outcome.
+      firstAmbiguousAt ??= candle.time + tfMs;
+      continue;
     }
 
     if (hitTP) {
@@ -306,6 +306,15 @@ function evaluateSignal(doc, candles, now, timeframe) {
         closedAt: candle.time + tfMs
       };
     }
+  }
+
+  if (firstAmbiguousAt !== null) {
+    return {
+      entryTouched,
+      entryTouchedAt,
+      ambiguous: true,
+      ambiguousAt: firstAmbiguousAt
+    };
   }
 
   return { entryTouched, entryTouchedAt };
