@@ -3155,36 +3155,16 @@ function processPendingSignalsAtPrice(price,allowedSetupNumbers=[1,2,3]){
         s.entryTouched=true;
         s.entryTouchedAt=s.entryTouchedAt||now;
         s.entryTouchedRecovered=false;
+        /* If the first observed tick is already beyond SL, its path before
+           observation is unknown. Require candle-order recovery before
+           deciding the outcome; later ticks alone must not guess TP vs SL. */
+        s.entryTouchNeedsCandleResolution = s.type==="BUY" ? price<=sl : price>=sl;
         changed=true;
 
-        /* If this SAME live tick also crosses a target, finalize immediately. */
-        if(s.type==="BUY"){
-          if(price>=tp){
-            s.status="HIT TP";
-            s.closedAt=now;
-            s.closePrice=price;
-            return;
-          }
-          if(price<=sl){
-            s.status="HIT SL";
-            s.closedAt=now;
-            s.closePrice=price;
-            return;
-          }
-        }else{
-          if(price<=tp){
-            s.status="HIT TP";
-            s.closedAt=now;
-            s.closePrice=price;
-            return;
-          }
-          if(price>=sl){
-            s.status="HIT SL";
-            s.closedAt=now;
-            s.closePrice=price;
-            return;
-          }
-        }
+        /* This tick establishes Entry only. Do not infer TP/SL from the
+           same tick: a price jump can cross Entry and SL between observations.
+           TP/SL evaluation starts on a later tick or a later closed candle. */
+        return;
       }else{
         /*
           Do NOT mark TP/SL from the current price alone on a restored page.
@@ -3196,8 +3176,9 @@ function processPendingSignalsAtPrice(price,allowedSetupNumbers=[1,2,3]){
       }
     }
 
-    /* Entry has been confirmed. Live price can now close the signal. */
-    if(s.status!=="PENDING") return;
+    /* Entry has been confirmed. If the first observed tick had already
+       crossed SL, wait for closed-candle chronology instead of guessing. */
+    if(s.status!=="PENDING" || s.entryTouchNeedsCandleResolution) return;
 
     if(s.type==="BUY"){
       if(price>=tp){
@@ -3264,6 +3245,7 @@ function processPendingSignalsFromCandles(candles,livePrice,allowedSetupNumbers=
       .filter(c=>Number(c.time)>=signalCloseTime)
       .sort((a,b)=>Number(a.time)-Number(b.time));
 
+    let ambiguousEncountered=false;
     for(const c of afterSignal){
       const high=Number(c.high);
       const low=Number(c.low);
@@ -3279,7 +3261,8 @@ function processPendingSignalsFromCandles(candles,livePrice,allowedSetupNumbers=
         page was minimized or suspended.
       */
       if(!s.entryTouched){
-        const entryHit=s.type==="BUY" ? low<=entry : high>=entry;
+        // A candle must span Entry to prove that price traded through it.
+        const entryHit=low<=entry && high>=entry;
         if(!entryHit) continue;
 
         s.entryTouched=true;
@@ -3288,31 +3271,8 @@ function processPendingSignalsFromCandles(candles,livePrice,allowedSetupNumbers=
         s.entryTouchedRecovered=true;
         changed=true;
 
-        /*
-          If this FIRST Entry candle reaches exactly one target, the result
-          is deterministic. If it reaches both, OHLC cannot reveal which
-          came first, so keep PENDING and wait for a later candle/live tick.
-        */
-        const sameBarTp=s.type==="BUY" ? high>=tp : low<=tp;
-        const sameBarSl=s.type==="BUY" ? low<=sl : high>=sl;
-
-        if(sameBarTp && !sameBarSl){
-          s.status="HIT TP";
-          s.closedAt=Date.now();
-          s.closePrice=tp;
-          changed=true;
-          break;
-        }
-
-        if(sameBarSl && !sameBarTp){
-          s.status="HIT SL";
-          s.closedAt=Date.now();
-          s.closePrice=sl;
-          changed=true;
-          break;
-        }
-
-        /* Both TP and SL in the same candle: do not guess. */
+        /* Never decide TP/SL from the same candle that first proves Entry.
+           OHLC does not prove the intrabar sequence. Wait for a later candle. */
         continue;
       }
 
@@ -3325,8 +3285,12 @@ function processPendingSignalsFromCandles(candles,livePrice,allowedSetupNumbers=
       */
       const entryBarTime=Number(s.entryTouchedCandleTime);
       if(!Number.isFinite(entryBarTime)){
+        const liveEntryTime=Number(s.entryTouchedAt);
+        if(Number.isFinite(liveEntryTime) && candleTime + signalTfMs <= liveEntryTime) continue;
         s.entryTouchedCandleTime=candleTime;
         changed=true;
+        /* The candle containing the first observed Entry tick cannot prove
+           whether TP or SL happened first. Wait for a later closed candle. */
         continue;
       }
 
@@ -3338,37 +3302,9 @@ function processPendingSignalsFromCandles(candles,livePrice,allowedSetupNumbers=
 
       /* Both targets inside the same later OHLC candle: never guess order. */
       if(hitTp && hitSl){
-        const p=Number(livePrice);
-        if(Number.isFinite(p)){
-          if(s.type==="BUY" && p>=tp){
-            s.status="HIT TP";
-            s.closedAt=Date.now();
-            s.closePrice=p;
-            changed=true;
-            break;
-          }
-          if(s.type==="BUY" && p<=sl){
-            s.status="HIT SL";
-            s.closedAt=Date.now();
-            s.closePrice=p;
-            changed=true;
-            break;
-          }
-          if(s.type==="SELL" && p<=tp){
-            s.status="HIT TP";
-            s.closedAt=Date.now();
-            s.closePrice=p;
-            changed=true;
-            break;
-          }
-          if(s.type==="SELL" && p>=sl){
-            s.status="HIT SL";
-            s.closedAt=Date.now();
-            s.closePrice=p;
-            changed=true;
-            break;
-          }
-        }
+        // OHLC cannot reveal which level was reached first. Do not use the
+        // current price to guess the outcome of this ambiguous candle.
+        ambiguousEncountered=true;
         continue;
       }
 
@@ -3394,7 +3330,7 @@ function processPendingSignalsFromCandles(candles,livePrice,allowedSetupNumbers=
       Once Entry is known to have been touched, current live price can safely
       close the signal immediately without waiting for the next candle close.
     */
-    if(s.status==="PENDING" && s.entryTouched){
+    if(s.status==="PENDING" && s.entryTouched && !s.entryTouchNeedsCandleResolution && !ambiguousEncountered){
       const p=Number(livePrice);
       if(Number.isFinite(p)){
         if(s.type==="BUY" && p>=tp){
