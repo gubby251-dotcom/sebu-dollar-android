@@ -3176,9 +3176,10 @@ function processPendingSignalsAtPrice(price,allowedSetupNumbers=[1,2,3]){
       }
     }
 
-    /* Entry has been confirmed. If the first observed tick had already
-       crossed SL, wait for closed-candle chronology instead of guessing. */
-    if(s.status!=="PENDING" || s.entryTouchNeedsCandleResolution) return;
+    /* Live ticks may settle only an Entry observed in live sequence. If Entry
+       was recovered from historical OHLC after suspension, only subsequent
+       closed candles can establish TP/SL order; current price alone cannot. */
+    if(s.status!=="PENDING" || s.entryTouchNeedsCandleResolution || s.entryTouchedRecovered) return;
 
     if(s.type==="BUY"){
       if(price>=tp){
@@ -3330,7 +3331,7 @@ function processPendingSignalsFromCandles(candles,livePrice,allowedSetupNumbers=
       Once Entry is known to have been touched, current live price can safely
       close the signal immediately without waiting for the next candle close.
     */
-    if(s.status==="PENDING" && s.entryTouched && !s.entryTouchNeedsCandleResolution && !ambiguousEncountered){
+    if(s.status==="PENDING" && s.entryTouched && !s.entryTouchNeedsCandleResolution && !s.entryTouchedRecovered && !ambiguousEncountered){
       const p=Number(livePrice);
       if(Number.isFinite(p)){
         if(s.type==="BUY" && p>=tp){
