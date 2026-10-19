@@ -357,21 +357,22 @@ async function publishStatus(
     signalKey: documentId
   };
 
-  // Kirim notifikasi status ke topic pengguna.
-  await getMessaging().send({
-    topic: TOPIC,
-    data: payload,
-    android: {
-      priority: "high",
-      ttl: 60 * 60 * 1000
-    }
-  });
+  const db = getFirestore();
+  const signalRef = db.collection(COLLECTION).doc(documentId);
+  const terminalStatuses = new Set(["HIT TP", "HIT SL"]);
 
-  // Simpan status akhir setelah FCM berhasil menerima pesan.
-  await getFirestore()
-    .collection(COLLECTION)
-    .doc(documentId)
-    .update({
+  // Commit once, atomically. A stale or concurrent monitor cannot reverse a terminal result.
+  const commit = await db.runTransaction(async (tx) => {
+    const fresh = await tx.get(signalRef);
+    if (!fresh.exists) return { committed: false, reason: "MISSING" };
+    const current = String(fresh.get("status") || "").toUpperCase();
+    if (terminalStatuses.has(current)) {
+      return { committed: false, reason: current === status ? "ALREADY_COMMITTED" : "CONFLICT", status: current };
+    }
+    if (!["SENT", "PENDING", ""].includes(current)) {
+      return { committed: false, reason: "NOT_ACTIVE", status: current };
+    }
+    tx.update(signalRef, {
       status,
       resultStatus: status,
       timeframe,
@@ -380,12 +381,30 @@ async function publishStatus(
       entryTouchedAt: result.entryTouchedAt ?? null,
       closePrice: result.closePrice ?? null,
       closedAt: result.closedAt ?? null,
-      statusUpdatedAt: new Date().toISOString()
+      statusUpdatedAt: new Date().toISOString(),
+      statusNotificationPending: true,
+      statusNotificationPayload: payload
     });
+    return { committed: true, reason: "COMMITTED", status };
+  });
 
-  console.log(
-    `STATUS ${documentId}: ${status} + FCM broadcast OK`
-  );
+  if (!commit.committed) {
+    console.warn(`STATUS SKIPPED ${documentId}: ${commit.reason}; stored=${commit.status || "missing"}; proposed=${status}`);
+    return;
+  }
+
+  // Durable status comes first. FCM failure must not roll back the trading result.
+  try {
+    await getMessaging().send({
+      topic: TOPIC,
+      data: payload,
+      android: { priority: "high", ttl: 60 * 60 * 1000 }
+    });
+    await signalRef.update({ statusNotificationPending: false, statusNotificationSentAt: new Date().toISOString() });
+    console.log(`STATUS ${documentId}: ${status}; FCM accepted`);
+  } catch (error) {
+    console.error(`STATUS COMMITTED ${documentId}: ${status}; FCM failed; notification remains pending:`, error?.message || error);
+  }
 }
 
 /* =======================================================
