@@ -1,4 +1,5 @@
-name: SEBU DOLLAR AI Reliable M30 Realtime Scanner
+
+name: SEBU DOLLAR AI M5 Automatic SNR Scanner
 
 on:
   workflow_dispatch:
@@ -13,7 +14,7 @@ permissions:
   actions: write
 
 concurrency:
-  group: sebu-realtime-m30-scanner
+  group: sebu-auto-m5-snr-scanner
   cancel-in-progress: false
 
 jobs:
@@ -33,7 +34,7 @@ jobs:
       - name: Install Firebase Admin
         run: npm install --no-save firebase-admin
 
-      - name: Run Scanner and TP SL Status Monitor
+      - name: Run M5 Scanner and TP SL Status Monitor
         env:
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
           GH_TOKEN: ${{ github.token }}
@@ -45,22 +46,22 @@ jobs:
           POLL_SECONDS=20
           NEXT_WORKFLOW="reliable-signal-scanner.yml"
 
-          echo "SEBU DOLLAR AI — SCANNER + TP/SL STATUS MONITOR"
-          echo "Scanner poll: ${POLL_SECONDS}s"
+          echo "SEBU DOLLAR AI — M5 SNR SCANNER"
+          echo "M5 scanner poll: ${POLL_SECONDS}s"
 
           while true; do
             NOW=$(date +%s)
             ELAPSED=$((NOW - START_TIME))
 
             if [ "$ELAPSED" -ge "$RUNTIME_LIMIT" ]; then
-              echo "Runner mendekati batas; menjadwalkan runner berikutnya..."
+              echo "Menjadwalkan runner berikutnya..."
 
               if gh workflow run "$NEXT_WORKFLOW" \
                 --repo "${{ github.repository }}" \
                 --ref main; then
-                echo "Handoff runner berikutnya berhasil dijadwalkan."
+                echo "Handoff berhasil."
               else
-                echo "PERINGATAN: handoff gagal; backup schedule menjadi cadangan."
+                echo "PERINGATAN: handoff gagal."
               fi
 
               break
@@ -69,10 +70,10 @@ jobs:
             echo "----------------------------------------"
             echo "Check: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
 
-            if node scanner/reliable-index.mjs; then
-              echo "Scanner check selesai."
+            if node scanner/m5-auto-scanner.mjs; then
+              echo "M5 scanner selesai."
             else
-              echo "Scanner error; akan dicoba kembali."
+              echo "M5 scanner error; akan dicoba kembali."
             fi
 
             if node scanner/status-monitor.mjs; then
