@@ -1,7 +1,7 @@
 import { initializeApp, cert, getApps } from 'firebase-admin/app';
 import { getFirestore } from 'firebase-admin/firestore';
 import { getMessaging } from 'firebase-admin/messaging';
-import { closedCandles, detectH4Snr, detectM5Snr, evaluateM5Signal, normalizeCandles } from './m5-engine.mjs';
+import { closedCandles, detectH4Snr, detectM5Snr, evaluateM5Signal, normalizeCandles, resolveLockedM5Snr } from './m5-engine.mjs';
 
 const API = process.env.CANDLE_API_URL || 'https://biquote.io/api/XAUUSD/ohlc';
 const TOPIC = process.env.FCM_TOPIC || 'sebu_signal_users';
@@ -39,17 +39,25 @@ async function main() {
   if (!h4.length) throw new Error('Belum ada candle H4 tertutup');
   const h4Snr = detectH4Snr(h4);
   const last = m5.at(-1);
-  const m5Snr = detectM5Snr(m5.slice(0, -1), last.close, 2);
-  // Keep publishing the valid H4 levels even when the current M5 window has
-  // no confirmed swing on one side. The UI will show BELUM TERSEDIA for that side.
+  const m5History = m5.slice(0, -1);
+  const detectedM5Snr = detectM5Snr(m5History, last.close, 2);
+  const stateRef = db.collection('signal_scanner_state').doc('xauusd_m5');
+  const state = await stateRef.get();
+  const previousState = state.get('m5SnrLock') || {};
+  const lockedM5 = resolveLockedM5Snr(m5History, last.close, detectedM5Snr, previousState);
+  const m5Snr = lockedM5.snr;
+  // Persist each side independently so scanner restarts do not move locked levels.
+  const m5SnrLock = { support: lockedM5.support, resistance: lockedM5.resistance };
 
   const snrDoc = {
     symbol: 'XAUUSD', timeframe: 'M5',
     h4Resistance: h4Snr.resistance, h4Support: h4Snr.support,
     h4CandleTime: h4Snr.candleTime,
     h4CandleCloseTime: h4Snr.candleCloseTime,
-    m5Resistance: m5Snr?.resistance ?? null, m5Support: m5Snr?.support ?? null,
-    m5ResistanceTime: m5Snr?.resistanceTime ?? null, m5SupportTime: m5Snr?.supportTime ?? null,
+    m5Resistance: m5Snr.resistance ?? null, m5Support: m5Snr.support ?? null,
+    m5ResistanceTime: m5Snr.resistanceTime ?? null, m5SupportTime: m5Snr.supportTime ?? null,
+    m5ResistanceTouched: Boolean(lockedM5.resistance?.touched),
+    m5SupportTouched: Boolean(lockedM5.support?.touched),
     m5CandleTime: last.time, currentPrice: last.close,
     updatedAt: new Date().toISOString(), source: 'BIQUOTE_CLOSED_CANDLES'
   };
@@ -58,14 +66,14 @@ async function main() {
   console.log('SNR UPDATED', JSON.stringify(snrDoc));
 
   // Process only the newest fully closed M5 candle; Firestore claim makes retries idempotent.
-  const stateRef = db.collection('signal_scanner_state').doc('xauusd_m5');
-  const state = await stateRef.get();
   const previous = Number(state.get('lastProcessedCandleTime') || 0);
   if (last.time <= previous) {
+    await stateRef.set({ m5SnrLock, updatedAt: new Date().toISOString() }, { merge: true });
     console.log(`No new closed M5 candle. last=${last.time} checkpoint=${previous}`);
     return;
   }
-  const signal = m5Snr ? evaluateM5Signal(m5, { h4Snr, m5Snr }) : null;
+  const signal = (m5Snr.resistance !== null || m5Snr.support !== null)
+    ? evaluateM5Signal(m5, { h4Snr, m5Snr }) : null;
   if (signal && signal.candleTime === last.time) {
     const id = `M5_${signal.candleTime}_${signal.type}`;
     const ref = db.collection('sent_signals').doc(id);
@@ -93,7 +101,7 @@ async function main() {
     } else console.log('DUPLICATE BLOCKED', id);
   } else console.log('No valid M5 signal on', new Date(last.time).toISOString());
 
-  await stateRef.set({ lastProcessedCandleTime: last.time, updatedAt: new Date().toISOString(), timeframe: 'M5' }, { merge: true });
+  await stateRef.set({ lastProcessedCandleTime: last.time, m5SnrLock, updatedAt: new Date().toISOString(), timeframe: 'M5' }, { merge: true });
 }
 
 main().then(() => process.exit(0)).catch(error => { console.error('M5 AUTO SCANNER ERROR:', error?.stack || error); process.exit(1); });
