@@ -877,38 +877,75 @@ class MainActivity : AppCompatActivity() {
 
 
 
+    private fun buildMarketSnrPayload(doc: com.google.firebase.firestore.DocumentSnapshot): String {
+        val payload = JSONObject()
+        payload.put("symbol", doc.getString("symbol") ?: "XAUUSD")
+        payload.put("timeframe", doc.getString("timeframe") ?: "M5")
+        for (key in listOf("h4Resistance", "h4Support", "m5Resistance", "m5Support")) {
+            val raw = doc.get(key)
+            val number = when (raw) {
+                is Number -> raw.toDouble()
+                is String -> raw.trim().replace(",", ".").toDoubleOrNull()
+                else -> null
+            }
+            if (number != null && number.isFinite()) payload.put(key, number)
+            else payload.put(key, JSONObject.NULL)
+        }
+        payload.put("updatedAt", doc.getString("updatedAt") ?: "")
+        return payload.toString()
+    }
+
+    private fun publishMarketSnr(doc: com.google.firebase.firestore.DocumentSnapshot, source: String) {
+        if (!doc.exists()) {
+            android.util.Log.w("SEBU_SNR", "Dokumen SNR tidak ditemukan dari $source")
+            return
+        }
+        val payload = buildMarketSnrPayload(doc)
+        latestSnrPayload = payload
+        android.util.Log.i("SEBU_SNR", "Data SNR diterima dari $source: $payload")
+        deliverMarketSnrToWebView(payload, 0)
+    }
+
+    private fun fetchMarketSnrFromServer(attempt: Int = 0) {
+        if (isFinishing || isDestroyed) return
+        firestore.collection("market_analysis")
+            .document("xauusd_snr")
+            .get(Source.SERVER)
+            .addOnSuccessListener { doc ->
+                if (doc.exists()) {
+                    publishMarketSnr(doc, "SERVER_GET")
+                } else if (attempt < 5) {
+                    mainHandler.postDelayed({ fetchMarketSnrFromServer(attempt + 1) }, 3000L)
+                } else {
+                    android.util.Log.e("SEBU_SNR", "Dokumen SNR tidak ditemukan setelah 6 kali pemeriksaan server")
+                }
+            }
+            .addOnFailureListener { error ->
+                android.util.Log.e("SEBU_SNR", "SERVER_GET SNR gagal (percobaan ${attempt + 1}/6)", error)
+                if (attempt < 5) {
+                    mainHandler.postDelayed({ fetchMarketSnrFromServer(attempt + 1) }, 3000L)
+                }
+            }
+    }
+
     private fun syncMarketSnrFromFirestore() {
         snrListener?.remove()
-        snrListener = FirebaseFirestore.getInstance()
-            .collection("market_analysis")
-            .document("xauusd_snr")
-            .addSnapshotListener { doc, error ->
-                if (error != null) {
-                    android.util.Log.e("SEBU_SNR", "Gagal memantau SNR H4/M5", error)
-                    return@addSnapshotListener
-                }
-                if (doc == null || !doc.exists()) {
-                    android.util.Log.w("SEBU_SNR", "Dokumen market_analysis/xauusd_snr belum ada")
-                    return@addSnapshotListener
-                }
-                val payload = JSONObject()
-                payload.put("symbol", doc.getString("symbol") ?: "XAUUSD")
-                payload.put("timeframe", doc.getString("timeframe") ?: "M5")
-                for (key in listOf("h4Resistance", "h4Support", "m5Resistance", "m5Support")) {
-                    val raw = doc.get(key)
-                    val number = when (raw) {
-                        is Number -> raw.toDouble()
-                        is String -> raw.trim().replace(",", ".").toDoubleOrNull()
-                        else -> null
-                    }
-                    if (number != null && number.isFinite()) payload.put(key, number)
-                    else payload.put(key, JSONObject.NULL)
-                }
-                payload.put("updatedAt", doc.getString("updatedAt") ?: "")
-                latestSnrPayload = payload.toString()
-                android.util.Log.d("SEBU_SNR", "Snapshot SNR diterima: $latestSnrPayload")
-                deliverMarketSnrToWebView(latestSnrPayload!!, 0)
+        val snrRef = firestore.collection("market_analysis").document("xauusd_snr")
+
+        // Ambil langsung dari server sebagai jalur utama awal; listener menjaga update otomatis.
+        fetchMarketSnrFromServer()
+
+        snrListener = snrRef.addSnapshotListener { doc, error ->
+            if (error != null) {
+                android.util.Log.e("SEBU_SNR", "Listener SNR gagal; jalur SERVER_GET tetap berjalan", error)
+                return@addSnapshotListener
             }
+            if (doc == null || !doc.exists()) {
+                android.util.Log.w("SEBU_SNR", "Snapshot SNR kosong; menunggu pembaruan berikutnya")
+                return@addSnapshotListener
+            }
+            publishMarketSnr(doc, "SNAPSHOT")
+        }
     }
 
     private fun deliverMarketSnrToWebView(payload: String, attempt: Int) {
