@@ -14,7 +14,9 @@ export function normalizeCandles(rows) {
     let time = typeof rawTime === 'number' ? rawTime : Number(rawTime);
     if (!Number.isFinite(time)) time = Date.parse(String(rawTime ?? ''));
     if (Number.isFinite(time) && time < 1e12) time *= 1000;
-    const candle = { time, open: Number(row?.open ?? row?.o), high: Number(row?.high ?? row?.h), low: Number(row?.low ?? row?.l), close: Number(row?.close ?? row?.c) };
+    const rawIsOpen = row?.isOpen ?? row?.is_open;
+    const isOpen = rawIsOpen === true || String(rawIsOpen).toLowerCase() === 'true';
+    const candle = { time, open: Number(row?.open ?? row?.o), high: Number(row?.high ?? row?.h), low: Number(row?.low ?? row?.l), close: Number(row?.close ?? row?.c), ...(rawIsOpen !== undefined ? { isOpen } : {}) };
     if (![candle.time, candle.open, candle.high, candle.low, candle.close].every(Number.isFinite)) continue;
     if (candle.high < Math.max(candle.open, candle.close) || candle.low > Math.min(candle.open, candle.close) || candle.high < candle.low) continue;
     byTime.set(candle.time, candle);
@@ -24,7 +26,11 @@ export function normalizeCandles(rows) {
 
 export function closedCandles(candles, timeframeMs, now = Date.now()) {
   if (!Number.isFinite(timeframeMs) || timeframeMs <= 0) throw new TypeError('timeframeMs must be positive');
-  return normalizeCandles(candles).filter(c => c.time % timeframeMs === 0 && c.time + timeframeMs <= now);
+  return normalizeCandles(candles).filter(c =>
+    c.isOpen !== true &&
+    c.time % timeframeMs === 0 &&
+    c.time + timeframeMs <= now
+  );
 }
 
 // H4 levels are refreshed from the most recently completed H4 candle.
@@ -32,7 +38,13 @@ export function detectH4Snr(h4Candles) {
   const candles = normalizeCandles(h4Candles);
   if (!candles.length) return null;
   const last = candles.at(-1);
-  return { resistance: last.high, support: last.low, candleTime: last.time, source: 'H4_CLOSED_WICK' };
+  return {
+    resistance: last.high,
+    support: last.low,
+    candleTime: last.time,
+    candleCloseTime: last.time + TF_MS.H4,
+    source: 'H4_LAST_CLOSED_CANDLE_WICK'
+  };
 }
 
 // Confirmed M5 swing points: two candles on each side must have closed.
