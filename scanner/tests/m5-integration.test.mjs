@@ -2,7 +2,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-import { detectM5Snr, TF_MS } from '../m5-engine.mjs';
+import { detectM5Snr, resolveLockedM5Snr, TF_MS } from '../m5-engine.mjs';
 
 const scannerUrl = new URL('../m5-auto-scanner.mjs', import.meta.url);
 const engineUrl = new URL('../m5-engine.mjs', import.meta.url);
@@ -87,7 +87,9 @@ test('scanner builds M5 SNR from closed history before evaluating the newest sig
   // Keep the newest closed candle available as C2 for signal confirmation.
   // SNR is calculated from the preceding closed candles so C2 cannot erase
   // the very level against which its own setup is being evaluated.
-  assert.match(scanner, /const m5Snr = detectM5Snr\(m5\.slice\(0, -1\), last\.close, 2\)/);
+  assert.match(scanner, /const m5History = m5\.slice\(0, -1\)/);
+  assert.match(scanner, /const detectedM5Snr = detectM5Snr\(m5History, last\.close, 2\)/);
+  assert.match(scanner, /resolveLockedM5Snr\(m5History, last\.close, detectedM5Snr, previousState\)/);
   assert.match(scanner, /evaluateM5Signal\(m5, \{ h4Snr, m5Snr \}\)/);
 });
 
@@ -148,4 +150,27 @@ test('M5 SNR integration keeps a resistance after wick-only penetration', () => 
   const levels = detectM5Snr(candles, 108, 2);
   assert.equal(levels.resistance, 110);
   assert.equal(levels.resistanceLevels.includes(110), true);
+});
+
+
+test('scanner persists locked M5 SNR state between polling cycles', () => {
+  assert.match(scanner, /resolveLockedM5Snr/);
+  assert.match(scanner, /m5SnrLock/);
+  assert.match(scanner, /state\.get\('m5SnrLock'\)/);
+  assert.match(scanner, /m5ResistanceTouched/);
+  assert.match(scanner, /m5SupportTouched/);
+});
+
+test('locked M5 SNR resolver preserves an untouched level until a closer new structure forms', () => {
+  const base = Date.UTC(2026, 0, 1);
+  const c = (i, open, high, low, close) => ({time:base+i*TF_MS.M5,open,high,low,close});
+  const candles = [c(3,100,109,97,102),c(4,102,108,98,103),c(5,103,107,99,104)];
+  const detected = {
+    supportCandidates:[{price:90,time:base},{price:96,time:base+2*TF_MS.M5}],
+    resistanceCandidates:[{price:120,time:base},{price:112,time:base+2*TF_MS.M5}]
+  };
+  const previous = {support:{price:90,time:base,touched:false},resistance:{price:120,time:base,touched:false}};
+  const result = resolveLockedM5Snr(candles,104,detected,previous);
+  assert.equal(result.snr.support,96);
+  assert.equal(result.snr.resistance,112);
 });
