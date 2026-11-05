@@ -47,12 +47,14 @@ async function main() {
     symbol: 'XAUUSD', timeframe: 'M5',
     h4Resistance: h4Snr.resistance, h4Support: h4Snr.support,
     h4CandleTime: h4Snr.candleTime,
+    h4CandleCloseTime: h4Snr.candleCloseTime,
     m5Resistance: m5Snr?.resistance ?? null, m5Support: m5Snr?.support ?? null,
     m5ResistanceTime: m5Snr?.resistanceTime ?? null, m5SupportTime: m5Snr?.supportTime ?? null,
     m5CandleTime: last.time, currentPrice: last.close,
     updatedAt: new Date().toISOString(), source: 'BIQUOTE_CLOSED_CANDLES'
   };
   await db.collection('market_analysis').doc('xauusd_snr').set(snrDoc, { merge: true });
+  console.log(`H4 CLOSED CANDLE SELECTED: open=${new Date(h4Snr.candleTime).toISOString()} close=${new Date(h4Snr.candleCloseTime).toISOString()} high=${h4Snr.resistance} low=${h4Snr.support}`);
   console.log('SNR UPDATED', JSON.stringify(snrDoc));
 
   // Process only the newest fully closed M5 candle; Firestore claim makes retries idempotent.
