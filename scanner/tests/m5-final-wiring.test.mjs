@@ -55,3 +55,27 @@ test('Android receives SNR snapshots from Firestore', async () => {
   assert.match(kotlin, /addSnapshotListener/);
   assert.match(kotlin, /updateMarketSnr/);
 });
+
+
+test('Android history uses a live Firestore snapshot listener', async () => {
+  const kotlin = await read('app/src/main/java/com/gubby251/sebudollarai/MainActivity.kt');
+  assert.match(kotlin, /historyListener\s*=\s*firestore\.collection\("sent_signals"\)/);
+  assert.match(kotlin, /addSnapshotListener/);
+  assert.match(kotlin, /onResume\(\)/);
+  assert.match(kotlin, /timeframeMinutes.*5/);
+});
+
+test('M5 notification intent does not require a legacy setup number', async () => {
+  const kotlin = await read('app/src/main/java/com/gubby251/sebudollarai/MainActivity.kt');
+  assert.match(kotlin, /M5 engine has no Setup label/);
+  assert.doesNotMatch(kotlin, /setup\.isNullOrBlank\(\)/);
+});
+
+test('TradingView loader retries and chart is exposed to Android WebView', async () => {
+  const html = await read('public/index.html');
+  assert.match(html, /function loadTradingViewLibrary\(/);
+  assert.match(html, /widgetembed\//);
+  assert.match(html, /window\.updateChart=updateChart/);
+  assert.match(html, /OANDA:XAUUSD/);
+  assert.match(html, /renderTradingViewIframeFallback/);
+});
