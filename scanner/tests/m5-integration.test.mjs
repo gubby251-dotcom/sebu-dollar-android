@@ -2,6 +2,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
+import { detectM5Snr, TF_MS } from '../m5-engine.mjs';
 
 const scannerUrl = new URL('../m5-auto-scanner.mjs', import.meta.url);
 const engineUrl = new URL('../m5-engine.mjs', import.meta.url);
@@ -18,7 +19,8 @@ test('scanner imports the M5 engine functions', () => {
   assert.match(scanner, /closedCandles/);
   assert.match(scanner, /detectH4Snr/);
   assert.match(scanner, /detectM5Snr/);
-  assert.match(scanner, /evaluateM5Rejection/);
+  assert.match(scanner, /evaluateM5Signal/);
+  assert.match(scanner, /evaluateM5Signal\(m5, \{ h4Snr, m5Snr \}\)/);
 });
 
 test('scanner fetches M5 and H4 candle data', () => {
@@ -81,8 +83,69 @@ test('status monitor must not execute legacy M30/M15 signals', () => {
 });
 
 
-test('scanner uses all closed M5 candles to retire body-broken levels', () => {
-  assert.match(scanner, /detectM5Snr\(m5, last\.close, 2\)/);
-  assert.match(scanner, /m5BrokenResistanceLevels/);
-  assert.match(scanner, /m5BrokenSupportLevels/);
+test('scanner builds M5 SNR from closed history before evaluating the newest signal candle', () => {
+  // Keep the newest closed candle available as C2 for signal confirmation.
+  // SNR is calculated from the preceding closed candles so C2 cannot erase
+  // the very level against which its own setup is being evaluated.
+  assert.match(scanner, /const m5Snr = detectM5Snr\(m5\.slice\(0, -1\), last\.close, 2\)/);
+  assert.match(scanner, /evaluateM5Signal\(m5, \{ h4Snr, m5Snr \}\)/);
+});
+
+test('M5 SNR integration retires a resistance only after a later body close above it', () => {
+  const base = Date.UTC(2026, 0, 1);
+  const c = (i, open, high, low, close) => ({ time: base + i * TF_MS.M5, open, high, low, close });
+  const candles = [
+    c(0,100,105,98,101), c(1,101,108,99,102), c(2,102,110,100,103),
+    c(3,103,107,97,100), c(4,100,104,95,99),
+    c(5,109,112,108,111),
+    c(6,111,113,109,112), c(7,112,114,110,113),
+    c(8,113,115,111,114), c(9,113,114,110,112), c(10,112,113,109,112)
+  ];
+  const levels = detectM5Snr(candles, 112, 2);
+  assert.equal(levels.resistance, 115);
+  assert.equal(levels.resistanceLevels.includes(110), false);
+});
+
+
+test('M5 SNR integration retires a support only after a later body close below it', () => {
+  const base = Date.UTC(2026, 0, 1);
+  const c = (i, open, high, low, close) => ({ time: base + i * TF_MS.M5, open, high, low, close });
+  const candles = [
+    c(0,100,105,95,101), c(1,101,104,92,100), c(2,100,103,90,99),
+    c(3,99,104,94,101), c(4,101,105,95,102),
+    c(5,91,93,88,89),
+    c(6,89,94,87,92), c(7,92,96,88,94),
+    c(8,94,98,85,93), c(9,93,97,87,92), c(10,92,96,88,93)
+  ];
+  const levels = detectM5Snr(candles, 90, 2);
+  assert.equal(levels.support, 85);
+  assert.equal(levels.supportLevels.includes(90), false);
+});
+
+test('M5 SNR integration keeps a support after wick-only penetration', () => {
+  const base = Date.UTC(2026, 0, 1);
+  const c = (i, open, high, low, close) => ({ time: base + i * TF_MS.M5, open, high, low, close });
+  const candles = [
+    c(0,100,105,95,101), c(1,101,104,92,100), c(2,100,103,90,99),
+    c(3,99,104,94,101), c(4,101,105,95,102),
+    c(5,91,93,88,90.5), c(6,90.5,94,89,92),
+    c(7,92,96,91,94), c(8,94,98,92,93)
+  ];
+  const levels = detectM5Snr(candles, 95, 2);
+  assert.equal(levels.support, 90);
+  assert.equal(levels.supportLevels.includes(90), true);
+});
+
+test('M5 SNR integration keeps a resistance after wick-only penetration', () => {
+  const base = Date.UTC(2026, 0, 1);
+  const c = (i, open, high, low, close) => ({ time: base + i * TF_MS.M5, open, high, low, close });
+  const candles = [
+    c(0,100,105,98,101), c(1,101,108,99,102), c(2,102,110,100,103),
+    c(3,103,107,97,100), c(4,100,104,95,99),
+    c(5,109,112,108,109.5), c(6,109.5,109.8,108,109),
+    c(7,109,109.5,107,108), c(8,108,109,106,108)
+  ];
+  const levels = detectM5Snr(candles, 108, 2);
+  assert.equal(levels.resistance, 110);
+  assert.equal(levels.resistanceLevels.includes(110), true);
 });
