@@ -1235,6 +1235,30 @@ let signalHistory=[];
 
 let activeSlPips=0;
 
+/*
+  LOT CALCULATOR — EQUITY-BASED LEGACY RULE
+  Uses equity and risk percentage only; SL distance is intentionally
+  not part of this calculation. At $1,000 equity and 1% risk, result = 0.10 lot.
+*/
+function calcLot(){
+  const equityInput=document.getElementById("equity");
+  const riskInput=document.getElementById("riskPercent");
+  const output=document.getElementById("recLot");
+  if(!equityInput || !riskInput || !output) return;
+
+  const equity=Number(equityInput.value);
+  const riskPercent=Number(riskInput.value);
+  if(!Number.isFinite(equity) || !Number.isFinite(riskPercent) || equity<=0 || riskPercent<=0){
+    output.textContent="0.00 Lot";
+    return;
+  }
+
+  // Legacy sizing: $1,000 at 1% risk = 0.10 lot.
+  const rawLot=(equity*riskPercent)/10000;
+  const lot=Math.round((rawLot+Number.EPSILON)*100)/100;
+  output.textContent=lot.toFixed(2)+" Lot";
+}
+
 /* Signal currently displayed in AI TRADE SETUP. */
 let activeSetupKey=null;
 
