@@ -39,19 +39,18 @@ async function main() {
   if (!h4.length) throw new Error('Belum ada candle H4 tertutup');
   const h4Snr = detectH4Snr(h4);
   const last = m5.at(-1);
-  const m5Snr = detectM5Snr(m5, last.close, 2);
-  if (!m5Snr) throw new Error('SNR M5 belum dapat ditentukan dari swing terkonfirmasi');
+  const m5Snr = detectM5Snr(m5.slice(0, -1), last.close, 2);
+  // Keep publishing the valid H4 levels even when the current M5 window has
+  // no confirmed swing on one side. The UI will show BELUM TERSEDIA for that side.
 
   const snrDoc = {
     symbol: 'XAUUSD', timeframe: 'M5',
     h4Resistance: h4Snr.resistance, h4Support: h4Snr.support,
     h4CandleTime: h4Snr.candleTime,
-    m5Resistance: m5Snr.resistance, m5Support: m5Snr.support,
-    m5ResistanceTime: m5Snr.resistanceTime, m5SupportTime: m5Snr.supportTime,
+    m5Resistance: m5Snr?.resistance ?? null, m5Support: m5Snr?.support ?? null,
+    m5ResistanceTime: m5Snr?.resistanceTime ?? null, m5SupportTime: m5Snr?.supportTime ?? null,
     m5CandleTime: last.time, currentPrice: last.close,
-    updatedAt: new Date().toISOString(), source: 'BIQUOTE_CLOSED_CANDLES_M5_BODY_BREAK_FILTER',
-    m5BrokenResistanceLevels: m5Snr.brokenResistanceLevels,
-    m5BrokenSupportLevels: m5Snr.brokenSupportLevels
+    updatedAt: new Date().toISOString(), source: 'BIQUOTE_CLOSED_CANDLES'
   };
   await db.collection('market_analysis').doc('xauusd_snr').set(snrDoc, { merge: true });
   console.log('SNR UPDATED', JSON.stringify(snrDoc));
@@ -64,7 +63,7 @@ async function main() {
     console.log(`No new closed M5 candle. last=${last.time} checkpoint=${previous}`);
     return;
   }
-  const signal = evaluateM5Rejection(m5, { h4Snr, m5Snr });
+  const signal = m5Snr ? evaluateM5Rejection(m5, { h4Snr, m5Snr }) : null;
   if (signal && signal.candleTime === last.time) {
     const id = `M5_${signal.candleTime}_${signal.type}`;
     const ref = db.collection('sent_signals').doc(id);
