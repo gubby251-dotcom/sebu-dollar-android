@@ -963,67 +963,13 @@ font-size:10px
 
 <div class="grid4">
 
-<div class="metric">
-
-<div class="k">
-MARKET TREND
-</div>
-
-<div
-class="v wait"
-id="trend"
->
-MENUNGGU KONFIRMASI STRUKTUR
-</div>
+<div class="metric"><div class="k">H4 RESISTANCE</div><div class="v wait" id="snrH4Resistance">MENUNGGU DATA</div></div>
+<div class="metric"><div class="k">H4 SUPPORT</div><div class="v wait" id="snrH4Support">MENUNGGU DATA</div></div>
+<div class="metric"><div class="k">M5 RESISTANCE TERDEKAT</div><div class="v wait" id="snrM5Resistance">MENUNGGU DATA</div></div>
+<div class="metric"><div class="k">M5 SUPPORT TERDEKAT</div><div class="v wait" id="snrM5Support">MENUNGGU DATA</div></div>
 
 </div>
-
-<div class="metric">
-
-<div class="k">
-ENTRY TRIGGER
-</div>
-
-<div
-class="v wait"
-id="entry"
->
-STANDBY
-</div>
-
-</div>
-
-<div class="metric">
-
-<div class="k">
-RBS / SBR STATUS
-</div>
-
-<div
-class="v wait"
-id="rbs_sbr_status"
->
--
-</div>
-
-</div>
-
-<div class="metric">
-
-<div class="k">
-SIGNAL CONFIDENCE
-</div>
-
-<div
-class="v wait"
-id="confidence"
->
--
-</div>
-
-</div>
-
-</div>
+<div hidden><span id="trend"></span><span id="entry"></span><span id="rbs_sbr_status"></span><span id="confidence"></span></div>
 
 <div
 class="warn"
@@ -1379,8 +1325,8 @@ const CANDLE_API_URL="https://biquote.io/api/XAUUSD/ohlc";
 const LIVE_QUOTE_API_URL="https://biquote.io/api/XAUUSD?allowStale=false";
 const BROKER_SCANNER_SYMBOL="XAUUSD";
 const BIQUOTE_WS_URL="https://biquote.io/hubs/tick";
-const SCANNER_TIMEFRAME_MINUTES=30;
-const SETUP3_TIMEFRAME_MINUTES=15;
+const SCANNER_TIMEFRAME_MINUTES=5;
+const SETUP3_TIMEFRAME_MINUTES=5;
 const SCANNER_BAR_LIMIT=80;
 const LIVE_MAX_AGE_MS=15000;
 const LIVE_POLL_MS=2000;
@@ -1523,7 +1469,7 @@ function startBiQuoteWebSocket(){
       biQuoteLiveTick=tick;
       /* Immediate TP/SL evaluation on every real-time XAUUSD tick.
          This does not alter the signal/scanner rules. */
-      processPendingSignalsAtPrice(mid,[1,2,3]);
+      processPendingSignalsAtPrice(mid,[0]);
       /* Do not call markLiveFeed here: REST freshness is authoritative. */
     });
 
@@ -1930,7 +1876,7 @@ signalHistory=[];
 */
 function getSignalHistorySyncKey(s){
   return String(s?.setupNumber||0)+"_"+
-    String(s?.timeframeMinutes||SCANNER_TIMEFRAME_MINUTES)+"_"+
+    String(s?.timeframeMinutes||5)+"_"+
     String(s?.type||"")+"_"+String(s?.candleTime||"");
 }
 
@@ -1948,15 +1894,13 @@ function mergeFirestoreSignalHistory(payload){
       if(!row) continue;
       const timeframe=String(row.timeframe||"").toUpperCase();
       const timeframeMinutes=Number(row.timeframeMinutes||(timeframe==="M30"?30:timeframe==="M15"?15:timeframe==="M5"?5:0));
-      const setupNumber=Number(row.setupNumber||row.setup||0);
+      const setupNumber=0;
       const type=String(row.type||"").toUpperCase();
       const candleTime=Number(row.candleTime);
       const entry=Number(row.entry), sl=Number(row.sl), tp=Number(row.tp);
       const closeTime=Number(row.candleCloseTime)||(candleTime+timeframeMinutes*60000);
-      if(!["BUY","SELL"].includes(type)||![15,30].includes(timeframeMinutes)||
+      if(!["BUY","SELL"].includes(type)||timeframeMinutes!==5||timeframe!=="M5"||
          !Number.isFinite(candleTime)||![entry,sl,tp].every(Number.isFinite)) continue;
-      if((timeframeMinutes===30 && ![1,2].includes(setupNumber))||
-         (timeframeMinutes===15 && setupNumber!==3)) continue;
       const effectiveBoundary=Math.max(
         Number(historyClearBoundaryCloseTime)||0,
         Number(serverHistoryBoundaryCloseTime)||0
@@ -1980,7 +1924,7 @@ function mergeFirestoreSignalHistory(payload){
         entryTouchedAt:Number(row.entryTouchedAt||previous?.entryTouchedAt)||null,
         pips:Math.abs(entry-sl),candleTime,candleCloseTime:closeTime,
         timeframeMinutes,timeframe,setupNumber,
-        setupName:String(row.setupName||previous?.setupName||("SETUP "+setupNumber)),
+        setupName:"M5 SNR ENGINE",
         signalKey:key,
         closePrice:Number(row.closePrice)||previous?.closePrice||null,
         closedAt:Number(row.closedAt)||previous?.closedAt||null
@@ -2008,8 +1952,9 @@ function receiveNativeSignalStatusUpdate(payload){
     if(!p||p.event!=="STATUS_UPDATE") return "INVALID";
     const finalStatus=String(p.status||"").toUpperCase();
     if(!["HIT TP","HIT SL"].includes(finalStatus)) return "IGNORED";
-    const setupNumber=Number(p.setupNumber||p.setup||0);
+    const setupNumber=0;
     const timeframeMinutes=Number(p.timeframeMinutes||0);
+    if(timeframeMinutes!==5) return "IGNORED";
     const type=String(p.type||"").toUpperCase();
     const candleTime=Number(p.candleTime);
     const key=getSignalHistorySyncKey({setupNumber,timeframeMinutes,type,candleTime});
@@ -2393,6 +2338,39 @@ async function getBiQuoteM15Candles(){
   if(!candles.length) throw new Error("Invalid BiQuote XAUUSD M15 OHLC response");
   return candles;
 }
+
+/* ANALYSIS OVERVIEW SNR: only completed H4/M5 candles are used. */
+function nearestConfirmedM5Levels(candles,price,leftRight=2){
+  const highs=[],lows=[];
+  for(let i=leftRight;i<candles.length-leftRight;i++){
+    const p=candles[i],before=candles.slice(i-leftRight,i),after=candles.slice(i+1,i+leftRight+1);
+    if(before.every(x=>p.high>x.high)&&after.every(x=>p.high>=x.high)) highs.push(p.high);
+    if(before.every(x=>p.low<x.low)&&after.every(x=>p.low<=x.low)) lows.push(p.low);
+  }
+  return {resistance:highs.filter(x=>x>price).sort((a,b)=>a-b)[0]??null,support:lows.filter(x=>x<price).sort((a,b)=>b-a)[0]??null};
+}
+async function refreshAnalysisSNR(){
+  const ids=["snrH4Resistance","snrH4Support","snrM5Resistance","snrM5Support"];
+  try{
+    const [h4raw,m5raw]=await Promise.all([
+      fetchJsonWithRetry(CANDLE_API_URL+"?interval=4h&limit=80",1),
+      fetchJsonWithRetry(CANDLE_API_URL+"?interval=5m&limit=160",1)
+    ]);
+    const now=Date.now(),h4ms=4*60*60*1000,m5ms=5*60*1000;
+    const h4=normalizeBiQuoteBars(h4raw).filter(c=>c.time%h4ms===0&&c.time+h4ms<=now);
+    const m5=normalizeBiQuoteBars(m5raw).filter(c=>c.time%m5ms===0&&c.time+m5ms<=now);
+    if(!h4.length||m5.length<5) throw new Error("Candle tertutup belum cukup");
+    const latestH4=h4[h4.length-1],latestM5=m5[m5.length-1];
+    const levels=nearestConfirmedM5Levels(m5.slice(0,-1),latestM5.close,2);
+    const values=[latestH4.high,latestH4.low,levels.resistance,levels.support];
+    values.forEach((v,i)=>{const el=document.getElementById(ids[i]);if(el)el.textContent=Number.isFinite(v)?Number(v).toFixed(2):"BELUM TERDETEKSI";});
+  }catch(error){
+    ids.forEach(id=>{const el=document.getElementById(id);if(el&&el.textContent==="MENUNGGU DATA")el.textContent="DATA TIDAK TERSEDIA";});
+    console.warn("Analysis SNR belum dapat diperbarui:",error?.message||error);
+  }
+}
+refreshAnalysisSNR();
+setInterval(refreshAnalysisSNR,30000);
 
 /* ONLY CLOSED M30 CANDLES */
 function getClosedCandles(candles){
@@ -2811,103 +2789,25 @@ $("waitingMessage").textContent=
 function receiveNativeSignal(payload){
   try{
     const p=(typeof payload==="string")?JSON.parse(payload):payload;
-    if(!p) return;
-
+    if(!p) return "INVALID";
     const tf=String(p.timeframe||"").toUpperCase();
-    const tfMin=Number(
-      p.timeframeMinutes||
-      (tf==="M30"?30:tf==="M15"?15:tf==="M5"?5:0)
-    );
-
-    const setupNumber=Number(
-      p.setupNumber||
-      p.setup||
-      0
-    );
-
+    const tfMin=Number(p.timeframeMinutes||(tf==="M5"?5:0));
     const type=String(p.type||"").toUpperCase();
-    const entry=Number(p.entry);
-    const sl=Number(p.sl);
-    const tp=Number(p.tp);
+    const entry=Number(p.entry), sl=Number(p.sl), tp=Number(p.tp);
     const candleTime=Number(p.candleTime);
-    const candleCloseTime=
-      Number(p.candleCloseTime)||
-      (candleTime+tfMin*60*1000);
-
-    if(
-      !["BUY","SELL"].includes(type)||
-      !Number.isFinite(entry)||
-      !Number.isFinite(sl)||
-      !Number.isFinite(tp)||
-      !Number.isFinite(candleTime)||
-      ![15,30].includes(tfMin)
-    ){
-      console.warn("Reliable scanner payload invalid:",p);
-      return;
-    }
-
-    if(
-      (tfMin===30 && ![1,2].includes(setupNumber))||
-      (tfMin===15 && setupNumber!==3)||
-      tfMin===5
-    ){
-      console.warn("Reliable scanner setup/timeframe mismatch:",p);
-      return;
-    }
-
+    const candleCloseTime=Number(p.candleCloseTime)||(candleTime+5*60000);
+    if(tf!=="M5"||tfMin!==5||!["BUY","SELL"].includes(type)||
+       ![entry,sl,tp,candleTime,candleCloseTime].every(Number.isFinite)) return "REJECTED";
     const risk=Math.abs(entry-sl);
-
-    if(!Number.isFinite(risk)||!(risk>0)){
-      console.warn("Reliable scanner risk invalid:",p);
-      return;
-    }
-
-    const res={
-      type:type,
-      entry:entry,
-      sl:sl,
-      tp:tp,
-      pips:risk,
-      candleTime:candleTime,
-      candleCloseTime:candleCloseTime,
-      confirmedAt:Date.now(),
-      setupNumber:setupNumber,
-      setupName:String(p.setupName||""),
-      timeframe:tf,
-      timeframeMinutes:tfMin,
-
-      trendText:
-        String(
-          p.trendText||
-          (
-            setupNumber===3 && tfMin===15
-              ?"SETUP 3 — M15 CONFIRMATION"
-              :"SETUP "+setupNumber+" — "+String(p.setupName||"")
-          )
-        ),
-
-      engulfText:
-        String(
-          p.engulfText||
-          (
-            tfMin===15
-              ?"M15 CONFIRMED"
-              :"CONFIRMED"
-          )
-        )
-    };
-
-    /*
-     * Pass the scanner-approved result directly into
-     * the existing AI Trade Setup + History pipeline.
-     */
+    if(!(risk>0)||Math.abs(Math.abs(tp-entry)-risk)>Math.max(0.01,risk*0.0001)) return "REJECTED";
+    const res={type,entry,sl,tp,pips:risk,candleTime,candleCloseTime,
+      confirmedAt:Date.now(),setupNumber:0,setupName:"M5 SNR ENGINE",
+      timeframe:"M5",timeframeMinutes:5,trendText:"M5 SNR CONFIRMED",engulfText:"C2 CLOSED"};
     triggerValidSignal(res);
-
+    return "ACCEPTED";
   }catch(e){
-    console.warn(
-      "Reliable scanner signal sync error:",
-      e
-    );
+    console.warn("M5 scanner payload invalid:",e);
+    return "ERROR";
   }
 }
 
@@ -2923,17 +2823,6 @@ function triggerValidSignal(res){
 $("rule_trend").textContent=res.trendText;
 
 $("rule_trend").style.color="var(--green)";
-
-/* Checkpoint 01 reflects only the three active setups. */
-if(Number(res?.setupNumber)===1 && Number(res?.timeframeMinutes)===30){
-  $("rule_trend").textContent="KONFIRMASI VALID M30";
-}
-if(Number(res?.setupNumber)===2 && Number(res?.timeframeMinutes)===30){
-  $("rule_trend").textContent="CONTINUATION VALID M30";
-}
-if(Number(res?.setupNumber)===3 && Number(res?.timeframeMinutes)===15){
-  $("rule_trend").textContent="KONFIRMASI VALID M15";
-}
 
 $("rule_engulf").textContent=res.engulfText;
 
@@ -3030,7 +2919,7 @@ activeSlPips=res.pips;
 calcLot();
 
 const signalKey=
-String(res.setupNumber||0)+"_"+String(res.timeframeMinutes||SCANNER_TIMEFRAME_MINUTES)+"_"+res.type+"_"+res.candleTime;
+String(res.setupNumber||0)+"_"+String(res.timeframeMinutes||5)+"_"+res.type+"_"+res.candleTime;
 
 if(lastSignalKey===signalKey){
 
@@ -3045,7 +2934,7 @@ signalHistory.unshift({
 time:
 new Date(
 Number(res.candleTime) +
-(Number(res.timeframeMinutes)||SCANNER_TIMEFRAME_MINUTES)*60*1000
+(Number(res.timeframeMinutes)||5)*60*1000
 )
 .toLocaleTimeString(
 "id-ID",
@@ -3068,8 +2957,8 @@ entryTouched:false,
 pips:res.pips,
 
 candleTime:res.candleTime,
-candleCloseTime:Number(res.candleCloseTime)|| (Number(res.candleTime)+(Number(res.timeframeMinutes)||SCANNER_TIMEFRAME_MINUTES)*60*1000),
-timeframeMinutes:Number(res.timeframeMinutes)||SCANNER_TIMEFRAME_MINUTES,
+candleCloseTime:Number(res.candleCloseTime)|| (Number(res.candleTime)+(Number(res.timeframeMinutes)||5)*60*1000),
+timeframeMinutes:Number(res.timeframeMinutes)||5,
 setupNumber:Number(res.setupNumber)||0
 
 });
@@ -3113,7 +3002,7 @@ res.type==="BUY"
    This specifically prevents the old failure where price touched Entry,
    then TP/SL, but the browser missed the Entry tick and left History PENDING.
 */
-function processPendingSignalsAtPrice(price,allowedSetupNumbers=[1,2,3]){
+function processPendingSignalsAtPrice(price,allowedSetupNumbers=[0]){
   if(!Number.isFinite(price)) return false;
 
   /*
@@ -3407,12 +3296,12 @@ async function checkPendingSignals(candleData=null){
 
   if(Number.isFinite(tickMid) && tickMid>0 && tickAge<=LIVE_MAX_AGE_MS){
     livePrice=tickMid;
-    processPendingSignalsAtPrice(livePrice,[1,2,3]);
+    processPendingSignalsAtPrice(livePrice,[0]);
   }else{
     const price=await getLiveMarketPrice();
     if(Number.isFinite(price)){
       livePrice=price;
-      processPendingSignalsAtPrice(livePrice,[1,2,3]);
+      processPendingSignalsAtPrice(livePrice,[0]);
     }
   }
 
@@ -3532,165 +3421,9 @@ async function scanSetup3M15(){
 
 /* AUTONOMOUS MARKET SCANNER */
 async function autonomousMarketScanner(){
-  if(scannerBusy) return;
-  scannerBusy=true;
-  try{
-    loadScannerState();
-    startBiQuoteLiveHeartbeat();
-    startBiQuoteWebSocket();
-
-    /* Active setups: Setup 1/2 on M30 and Setup 3 on M15. */
-    await scanSetup3M15();
-
-    let candles=[];
-    try{ candles=await getBiQuoteCandles(); }
-    catch(e){
-      console.warn("BiQuote XAUUSD M30 REST gagal:",e);
-      refreshLiveStatus();
-    }
-    if(!candles.length){
-      try{ showWaitingStructure('Menunggu live BiQuote XAUUSD M30…'); }catch(e){}
-      await checkPendingSignals(candles);
-      return;
-    }
-    const closedCandles=getClosedCandles(candles);
-    if(closedCandles.length<5){
-      await checkPendingSignals(candles);
-      return;
-    }
-    const newestClosed=closedCandles[closedCandles.length-1];
-    const newestTime=Number(newestClosed.time)||0;
-    const previousTime=Number(scannerLastScannedCandleTime)||0;
-    const clearBoundary=Math.max(
-      Number(historyClearBoundaryCloseTime)||0,
-      Number(serverHistoryBoundaryCloseTime)||0
-    );
-
-    /*
-      First-ever scanner start:
-      establish the current checkpoint without replaying old candles.
-      If History was cleared previously, the persistent boundary remains
-      active and blocks every pre-clear signal as an additional safeguard.
-    */
-    if(previousTime===0){
-      /*
-        First start: inspect only the newest closed M30 candle before setting
-        the checkpoint. This avoids replaying old signals while still allowing
-        a valid signal on the candle that just closed to be detected.
-      */
-      const firstCandidate=evaluateFourRules(closedCandles);
-      if(firstCandidate){
-        const firstClose=Number(firstCandidate.candleTime)+
-          SCANNER_TIMEFRAME_MINUTES*60*1000;
-        const allowedByClearBoundary=!clearBoundary||firstClose>clearBoundary;
-        const exists=signalHistory.some(s=>s&&s.type===firstCandidate.type&&Number(s.candleTime)===Number(firstCandidate.candleTime));
-        if(allowedByClearBoundary&&!exists) triggerValidSignal(firstCandidate);
-      }
-      saveScannerState(newestTime);
-      lastProcessedCandleTime=newestTime;
-      if(hasActivePendingSignal()) syncAiTradeSetup();
-      else showWaitingStructure(closedCandles);
-      await checkPendingSignals(candles);
-      return;
-    }
-
-    if(newestTime>previousTime){
-      const discovered=scanAllClosedEngulfings(closedCandles,200)
-        .filter(candidate=>{
-          const candleStart=Number(candidate.candleTime)||0;
-          const candleClose=
-            candleStart +
-            SCANNER_TIMEFRAME_MINUTES*60*1000;
-
-          /*
-            Normal scanner rule: only candles newer than the last
-            processed M30 candle.
-            Clear-History rule: additionally reject any signal whose
-            M30 CLOSE happened at/before the Clear action.
-          */
-          return candleStart>previousTime &&
-                 (!clearBoundary || candleClose>clearBoundary);
-        });
-
-      for(const candidate of discovered){
-        const exists=signalHistory.some(s=>s&&s.type===candidate.type&&Number(s.candleTime)===Number(candidate.candleTime));
-        /* Every new valid signal replaces the AI TRADE SETUP.
-           Existing PENDING signals are never deleted from History. */
-        if(!exists) triggerValidSignal(candidate);
-      }
-      saveScannerState(newestTime);
-      lastProcessedCandleTime=newestTime;
-      const latest=discovered[discovered.length-1];
-      if(latest) lastSignalKey=String(latest.setupNumber||0)+'_'+String(latest.timeframeMinutes||SCANNER_TIMEFRAME_MINUTES)+'_'+latest.type+'_'+latest.candleTime;
-    }else{
-      /*
-        Recheck the latest closed candle while the feed timestamp is unchanged.
-        Some feeds can publish/revise the final OHLC bar after its close; without
-        this retry, a valid engulfing missed on the first response would never
-        be evaluated again. History deduplication prevents duplicate signals.
-      */
-      const retryCandidate=evaluateFourRules(closedCandles);
-      if(retryCandidate && Number(retryCandidate.candleTime)>=previousTime){
-        const retryClose=Number(retryCandidate.candleTime)+
-          SCANNER_TIMEFRAME_MINUTES*60*1000;
-        const allowedByClearBoundary=!clearBoundary||retryClose>clearBoundary;
-        const exists=signalHistory.some(s=>s&&s.type===retryCandidate.type&&Number(s.candleTime)===Number(retryCandidate.candleTime));
-        if(allowedByClearBoundary&&!exists) triggerValidSignal(retryCandidate);
-      }
-      /* Never let the normal scanner refresh erase an active setup.
-         Older PENDING signals stay in History and keep running. */
-      syncAiTradeSetup();
-      if(!getActivePendingSignal()) showWaitingStructure(closedCandles);
-    }
-    await checkPendingSignals(candles);
-    console.debug('SIGNAL ENGINE: BIQUOTE XAUUSD M30','closed:',closedCandles.length,'ws:',biQuoteWsConnected,'checkpoint:',scannerLastScannedCandleTime);
-  }catch(e){
-    console.error('Scanner error:',e);
-  }finally{
-    scannerBusy=false;
-  }
+  // Signal generation is server-only. No browser-side M30/M15/M5 scanner is permitted.
+  return false;
 }
-
-/* LOT CALCULATOR
-   Risk-based sizing:
-   $1,000 equity × 1% risk = $10 risk
-   Standard XAUUSD sizing used by this engine:
-   $100 risk per 1.00 lot -> $10 risk = 0.10 lot.
-   Keep this calculation independent from active SL distance so
-   the displayed recommended lot does not jump to 1.00 Lot when
-   there is no active signal / SL distance.
-*/
-
-function calcLot(){
-
-const eq=
-parseFloat($("equity").value)||1000;
-
-const risk=
-parseFloat($("riskPercent").value)||1;
-
-const riskUsd=
-eq*risk/100;
-
-let lot=
-(riskUsd/100).toFixed(2);
-
-if(
-isNaN(lot)||
-Number(lot)<.01
-){
-
-lot="0.01";
-
-}
-
-$("recLot").textContent=
-lot+" Lot";
-
-}
-
-
-/* TRADINGVIEW */
 
 function updateChart(){
 
@@ -3740,9 +3473,6 @@ e
 );
 
 }
-
-/* Visual chart changes must not erase scanner state. Scanner remains M30. */
-setTimeout(autonomousMarketScanner,200);
 
 }
 
@@ -3881,11 +3611,6 @@ syncAiTradeSetup();
 updateChart();
 
 
-setInterval(
-autonomousMarketScanner,
-5000
-);
-
 // Wake the scanner immediately when the page becomes visible again.
 // This reduces the chance of missing a C2 after mobile browser suspension.
 document.addEventListener("visibilitychange",()=>{
@@ -3895,7 +3620,6 @@ document.addEventListener("visibilitychange",()=>{
     if(audioCtx && audioCtx.state==="suspended"){
       audioCtx.resume().catch(()=>{});
     }
-    autonomousMarketScanner();
   }
 });
 window.addEventListener("focus",()=>{
@@ -3904,7 +3628,6 @@ window.addEventListener("focus",()=>{
   if(audioCtx && audioCtx.state==="suspended"){
     audioCtx.resume().catch(()=>{});
   }
-  autonomousMarketScanner();
 });
 
 /* Recover audio after mobile browsers restore a backgrounded page.
