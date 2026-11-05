@@ -39,12 +39,14 @@ async function main() {
   if (!h4.length) throw new Error('Belum ada candle H4 tertutup');
   const h4Snr = detectH4Snr(h4);
   const last = m5.at(-1);
-  const m5History = m5.slice(0, -1);
-  const detectedM5Snr = detectM5Snr(m5History, last.close, 2);
+  // Use every fully closed candle for SNR touch/break state updates.
+  // Swing confirmation still requires two candles to the right, so the newest
+  // candle cannot become a confirmed pivot; it can, however, touch/break a locked level.
+  const detectedM5Snr = detectM5Snr(m5, last.close, 2);
   const stateRef = db.collection('signal_scanner_state').doc('xauusd_m5');
   const state = await stateRef.get();
   const previousState = state.get('m5SnrLock') || {};
-  const lockedM5 = resolveLockedM5Snr(m5History, last.close, detectedM5Snr, previousState);
+  const lockedM5 = resolveLockedM5Snr(m5, last.close, detectedM5Snr, previousState);
   const m5Snr = lockedM5.snr;
   // Persist each side independently so scanner restarts do not move locked levels.
   const m5SnrLock = { support: lockedM5.support, resistance: lockedM5.resistance };
