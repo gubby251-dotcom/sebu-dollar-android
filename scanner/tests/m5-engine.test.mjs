@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { normalizeCandles, closedCandles, detectH4Snr, detectM5Snr, evaluateM5Rejection, TF_MS } from '../m5-engine.mjs';
+import { normalizeCandles, closedCandles, detectH4Snr, detectM5Snr, evaluateM5Rejection, evaluateM5BreakoutRetest, evaluateM5Signal, TF_MS } from '../m5-engine.mjs';
 
 const base = Date.UTC(2026, 0, 1, 0, 0, 0);
 const candle = (i, o, h, l, c) => ({ time: base + i * TF_MS.M5, open:o, high:h, low:l, close:c });
@@ -107,4 +107,39 @@ test('H4 SNR rolls to the new candle only after its four-hour close', () => {
   assert.equal(levels.resistance, 4155);
   assert.equal(levels.support, 4108);
   assert.equal(levels.candleTime, h4Start + TF_MS.H4);
+});
+
+
+test('BUY breakout-retest is active through the combined M5 signal dispatcher', () => {
+  const rows = [
+    candle(0,99,102,98,101),   // body closes above resistance 100
+    candle(1,101,103,100.5,102),
+    candle(2,102,104,101,103),
+    candle(3,103,104,99.8,102), // retest holds above 100
+    candle(4,102,105,101,104),  // C1 bullish
+    candle(5,104,108,103,107)   // C2 confirms above C1 high
+  ];
+  const levels = { h4Snr:{resistance:100,support:90}, m5Snr:{resistance:100,support:90,resistanceLevels:[100],supportLevels:[90]} };
+  const signal = evaluateM5Signal(rows, levels);
+  assert.equal(signal.type, 'BUY');
+  assert.equal(signal.pattern, 'M5_SNR_BREAKOUT_RETEST');
+  assert.equal(signal.entry, 107);
+  assert.equal(signal.rr, 1);
+});
+
+test('SELL breakout-retest is active through the combined M5 signal dispatcher', () => {
+  const rows = [
+    candle(0,101,102,98,99),   // body closes below support 100
+    candle(1,99,99.5,97,98),
+    candle(2,98,99,96,97),
+    candle(3,97,100.2,96,98),  // retest holds below 100
+    candle(4,98,99,95,96),     // C1 bearish
+    candle(5,96,97,92,93)      // C2 confirms below C1 low
+  ];
+  const levels = { h4Snr:{resistance:110,support:100}, m5Snr:{resistance:110,support:100,resistanceLevels:[110],supportLevels:[100]} };
+  const signal = evaluateM5Signal(rows, levels);
+  assert.equal(signal.type, 'SELL');
+  assert.equal(signal.pattern, 'M5_SNR_BREAKOUT_RETEST');
+  assert.equal(signal.entry, 93);
+  assert.equal(signal.rr, 1);
 });
