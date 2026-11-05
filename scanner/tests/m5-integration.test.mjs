@@ -83,14 +83,13 @@ test('status monitor must not execute legacy M30/M15 signals', () => {
 });
 
 
-test('scanner builds M5 SNR from closed history before evaluating the newest signal candle', () => {
-  // Keep the newest closed candle available as C2 for signal confirmation.
-  // SNR is calculated from the preceding closed candles so C2 cannot erase
-  // the very level against which its own setup is being evaluated.
-  assert.match(scanner, /const m5History = m5\.slice\(0, -1\)/);
-  assert.match(scanner, /const detectedM5Snr = detectM5Snr\(m5History, last\.close, 2\)/);
-  assert.match(scanner, /resolveLockedM5Snr\(m5History, last\.close, detectedM5Snr, previousState\)/);
+test('scanner includes the newest fully closed M5 candle when updating locked SNR touch and break state', () => {
+  // The newest closed candle must update touch/break state immediately.
+  // Signal evaluation still uses m5 and keeps its own C2 confirmation rules.
+  assert.match(scanner, /detectM5Snr\(m5, last\.close, 2\)/);
+  assert.match(scanner, /resolveLockedM5Snr\(m5, last\.close, detectedM5Snr, previousState\)/);
   assert.match(scanner, /evaluateM5Signal\(m5, \{ h4Snr, m5Snr \}\)/);
+  assert.doesNotMatch(scanner, /m5History\s*=\s*m5\.slice\(0,\s*-1\)/);
 });
 
 test('M5 SNR integration retires a resistance only after a later body close above it', () => {
