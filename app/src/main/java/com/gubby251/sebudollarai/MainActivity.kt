@@ -6,14 +6,12 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Color
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.os.Bundle
 import android.text.InputType
 import android.view.Gravity
 import android.webkit.JavascriptInterface
-import android.webkit.CookieManager
-import android.webkit.ConsoleMessage
-import android.webkit.WebResourceError
-import android.webkit.WebResourceRequest
 import android.webkit.WebChromeClient
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -46,7 +44,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var auth: FirebaseAuth
     private lateinit var firestore: FirebaseFirestore
     private var snrListener: ListenerRegistration? = null
-    private var historyListener: ListenerRegistration? = null
+    private val mainHandler = Handler(Looper.getMainLooper())
+    @Volatile private var latestSnrPayload: String? = null
 
     private val ADMIN_UID =
         "ilhY96UDI3W9n4Qir4v78nu8G9X2"
@@ -751,20 +750,25 @@ class MainActivity : AppCompatActivity() {
 
 
         webView.settings.apply {
-            javaScriptEnabled = true
-            domStorageEnabled = true
+
+            javaScriptEnabled =
+                true
+
+            domStorageEnabled =
+                true
+
+            // Keep normal HTTP cache between app launches; do not force reloads.
+            cacheMode = android.webkit.WebSettings.LOAD_DEFAULT
             databaseEnabled = true
-            loadsImagesAutomatically = true
-            javaScriptCanOpenWindowsAutomatically = true
-            mediaPlaybackRequiresUserGesture = false
-            allowFileAccess = true
-            allowContentAccess = true
-            setSupportMultipleWindows(true)
-        }
-        // TradingView uses a cross-origin iframe; allow its third-party cookies.
-        CookieManager.getInstance().apply {
-            setAcceptCookie(true)
-            setAcceptThirdPartyCookies(webView, true)
+
+            loadsImagesAutomatically =
+                true
+
+            javaScriptCanOpenWindowsAutomatically =
+                true
+
+            mediaPlaybackRequiresUserGesture =
+                false
         }
 
 
@@ -791,6 +795,7 @@ class MainActivity : AppCompatActivity() {
                     // Sinkronkan riwayat dan SNR M5/H4 setelah halaman siap.
                     syncSignalHistoryFromFirestore()
                     syncMarketSnrFromFirestore()
+
                     /*
                      * Kalau Activity dibuka melalui
                      * notifikasi, proses Intent juga.
@@ -807,18 +812,6 @@ class MainActivity : AppCompatActivity() {
                         )
                     }
                 }
-
-                override fun onReceivedError(
-                    view: WebView?,
-                    request: WebResourceRequest?,
-                    error: WebResourceError?
-                ) {
-                    super.onReceivedError(view, request, error)
-                    android.util.Log.e(
-                        "SEBU_WEBVIEW",
-                        "Load error mainFrame=${request?.isForMainFrame} code=${error?.errorCode} desc=${error?.description} url=${request?.url}"
-                    )
-                }
             }
 
 
@@ -827,17 +820,8 @@ class MainActivity : AppCompatActivity() {
             "SEBUHistory"
         )
 
-        webView.webChromeClient = object : WebChromeClient() {
-            override fun onConsoleMessage(consoleMessage: ConsoleMessage): Boolean {
-                val line = "${consoleMessage.message()} -- ${consoleMessage.sourceId()}:${consoleMessage.lineNumber()}"
-                if (consoleMessage.messageLevel() == ConsoleMessage.MessageLevel.ERROR) {
-                    android.util.Log.e("SEBU_WEBVIEW_JS", line)
-                } else {
-                    android.util.Log.d("SEBU_WEBVIEW_JS", line)
-                }
-                return true
-            }
-        }
+        webView.webChromeClient =
+            WebChromeClient()
 
 
         webView.loadUrl(
@@ -895,7 +879,8 @@ class MainActivity : AppCompatActivity() {
 
     private fun syncMarketSnrFromFirestore() {
         snrListener?.remove()
-        snrListener = firestore.collection("market_analysis")
+        snrListener = FirebaseFirestore.getInstance()
+            .collection("market_analysis")
             .document("xauusd_snr")
             .addSnapshotListener { doc, error ->
                 if (error != null) {
@@ -908,58 +893,65 @@ class MainActivity : AppCompatActivity() {
                 }
                 val payload = JSONObject()
                 payload.put("timeframe", doc.getString("timeframe") ?: "M5")
-                var validCount = 0
                 for (key in listOf("h4Resistance", "h4Support", "m5Resistance", "m5Support")) {
                     val value = doc.get(key)
-                    if (value is Number && value.toDouble().isFinite()) {
-                        payload.put(key, value.toDouble())
-                        validCount++
-                    } else {
-                        android.util.Log.w("SEBU_SNR", "Field SNR $key tidak numerik/kosong: $value")
-                    }
+                    if (value is Number) payload.put(key, value) else payload.put(key, JSONObject.NULL)
                 }
-                payload.put("updatedAt", doc.getString("updatedAt") ?: "")
-                val argument = JSONObject.quote(payload.toString())
-                runOnUiThread {
-                    if (::webView.isInitialized) {
-                        webView.evaluateJavascript(
-                            "(function(){ if(!window.updateMarketSnr) return 'NOT_READY'; return window.updateMarketSnr($argument); })();"
-                        ) { result ->
-                            android.util.Log.d("SEBU_SNR", "SNR UI result=$result validFields=$validCount")
-                        }
-                    }
-                }
+                latestSnrPayload = payload.toString()
+                deliverMarketSnrToWebView(latestSnrPayload!!, 0)
             }
     }
 
-    /** Live listener for new M5 signals and later Entry/TP/SL status changes. */
+    private fun deliverMarketSnrToWebView(payload: String, attempt: Int) {
+        if (!::webView.isInitialized || isFinishing || isDestroyed) return
+        val argument = JSONObject.quote(payload)
+        webView.evaluateJavascript(
+            "(function(){if(typeof window.updateMarketSnr!=='function')return 'NOT_READY';return window.updateMarketSnr($argument);})();"
+        ) { result ->
+            val value = result?.trim('"') ?: "NO_RESULT"
+            if (value == "NOT_READY" && attempt < 8) {
+                mainHandler.postDelayed({ deliverMarketSnrToWebView(payload, attempt + 1) }, 400L)
+            } else if (value == "UPDATED") {
+                android.util.Log.d("SEBU_SNR", "Empat nilai SNR berhasil dikirim ke WebView")
+            } else {
+                android.util.Log.w("SEBU_SNR", "Hasil pengiriman SNR ke WebView: $value")
+            }
+        }
+    }
+
+    /*
+     * Dipanggil saat signal masuk ketika
+     * MainActivity sedang hidup.
+     */
     private fun syncSignalHistoryFromFirestore() {
         val currentUser = FirebaseAuth.getInstance().currentUser ?: return
-        historyListener?.remove()
-        historyListener = firestore.collection("sent_signals")
-            .addSnapshotListener { snapshot, error ->
-                if (error != null) {
-                    android.util.Log.e("SEBU_HISTORY", "Listener sent_signals gagal untuk ${currentUser.uid}", error)
-                    return@addSnapshotListener
-                }
-                if (snapshot == null) return@addSnapshotListener
+        val db = FirebaseFirestore.getInstance()
+
+        db.collection("sent_signals")
+            .get(Source.SERVER)
+            .addOnSuccessListener { snapshot ->
                 try {
-                    val rows = JSONArray()
+                    val rows = org.json.JSONArray()
+
                     for (doc in snapshot.documents) {
-                        val row = JSONObject()
+                        val row = org.json.JSONObject()
+
                         fun putValue(target: String, vararg candidates: String) {
                             for (candidate in candidates) {
-                                val value = doc.get(candidate) ?: continue
-                                when (value) {
-                                    is com.google.firebase.Timestamp -> row.put(target, value.toDate().time)
-                                    is java.util.Date -> row.put(target, value.time)
-                                    is Number -> row.put(target, value)
-                                    is Boolean -> row.put(target, value)
-                                    else -> row.put(target, value.toString())
+                                val value = doc.get(candidate)
+                                if (value != null) {
+                                    when (value) {
+                                        is com.google.firebase.Timestamp ->
+                                            row.put(target, value.toDate().time)
+                                        is java.util.Date ->
+                                            row.put(target, value.time)
+                                        else -> row.put(target, value.toString())
+                                    }
+                                    return
                                 }
-                                return
                             }
                         }
+
                         putValue("type", "type")
                         putValue("timeframe", "timeframe")
                         putValue("timeframeMinutes", "timeframeMinutes")
@@ -967,9 +959,17 @@ class MainActivity : AppCompatActivity() {
                         putValue("entry", "entry")
                         putValue("sl", "sl")
                         putValue("tp", "tp")
+                        // Utamakan status hasil akhir jika tersedia.
                         putValue("status", "resultStatus", "status")
                         putValue("resultStatus", "resultStatus", "status")
                         putValue("candleTime", "candleTime")
+
+                        // Mendukung candleTime yang disimpan sebagai Firestore Timestamp/Date.
+                        if (!row.has("candleTime")) {
+                            val idPrefix = doc.id.substringBefore("_")
+                            idPrefix.toLongOrNull()?.let { row.put("candleTime", it) }
+                        }
+
                         putValue("candleCloseTime", "candleCloseTime")
                         putValue("entryTouched", "entryTouched")
                         putValue("entryTouchedAt", "entryTouchedAt")
@@ -977,32 +977,34 @@ class MainActivity : AppCompatActivity() {
                         putValue("closedAt", "closedAt")
                         putValue("statusUpdatedAt", "statusUpdatedAt")
                         putValue("setupName", "setupName")
-                        putValue("createdAt", "createdAt")
-                        putValue("source", "source")
+
                         val timeframe = row.optString("timeframe", "").uppercase()
-                        val serverStatus = row.optString("status", "").uppercase()
-                        // SENDING is a transient claim. Only merge after FCM
-                        // publication is committed as SENT or a monitored result.
-                        if (serverStatus == "SENDING") continue
                         if (timeframe != "M5") continue
                         if (!row.has("timeframeMinutes")) row.put("timeframeMinutes", 5)
                         if (row.optInt("timeframeMinutes", 0) != 5) continue
-                        if (row.has("type") && row.has("entry") && row.has("sl") && row.has("tp") && row.has("candleTime")) rows.put(row)
+
+                        if (row.has("type") && row.has("entry") &&
+                            row.has("sl") && row.has("tp") &&
+                            row.has("candleTime")) {
+                            rows.put(row)
+                        }
                     }
-                    val payload = JSONObject.quote(rows.toString())
+
+                    val payload = org.json.JSONObject.quote(rows.toString())
                     val boundary = getSharedPreferences(PREFS, MODE_PRIVATE)
                         .getLong("history_boundary_ms_${currentUser.uid}", 0L)
                     runOnUiThread {
+                        val js = "(function(){ if(window.setServerHistoryBoundary) window.setServerHistoryBoundary($boundary); if(window.mergeFirestoreSignalHistory) return window.mergeFirestoreSignalHistory($payload); return 'NOT_READY'; })();"
                         if (::webView.isInitialized) {
-                            val js = "(function(){ if(window.setServerHistoryBoundary) window.setServerHistoryBoundary($boundary); if(window.mergeFirestoreSignalHistory) return window.mergeFirestoreSignalHistory($payload); return 'NOT_READY'; })();"
-                            webView.evaluateJavascript(js) { result ->
-                                android.util.Log.d("SEBU_HISTORY", "Firestore history merge=$result docs=${rows.length()}")
-                            }
+                            webView.evaluateJavascript(js, null)
                         }
                     }
                 } catch (e: Exception) {
                     android.util.Log.e("SEBU_HISTORY", "Gagal membentuk riwayat Firestore", e)
                 }
+            }
+            .addOnFailureListener { error ->
+                android.util.Log.e("SEBU_HISTORY", "Gagal membaca sent_signals untuk ${currentUser.uid}", error)
             }
     }
 
@@ -1184,19 +1186,24 @@ class MainActivity : AppCompatActivity() {
             result["type"]
                 ?.uppercase()
 
-        val timeframe = result["timeframe"]?.uppercase()
-        val timeframeMinutes = result["timeframeMinutes"]?.toIntOrNull()
-        val requiredNumbers = listOf("entry", "sl", "tp", "candleTime")
-            .all { key -> result[key]?.toDoubleOrNull()?.isFinite() == true }
+        val setup =
+            result["setup"]
+                ?: result["setupNumber"]
 
-        // M5 engine has no Setup label. A valid M5 payload must not be rejected
-        // merely because setupNumber is intentionally absent from FCM data.
-        if (type !in listOf("BUY", "SELL") || timeframe != "M5" ||
-            (timeframeMinutes != null && timeframeMinutes != 5) || !requiredNumbers) {
+        val timeframe =
+            result["timeframe"]
+
+
+        if (
+            type !in listOf(
+                "BUY",
+                "SELL"
+            ) ||
+            setup.isNullOrBlank() ||
+            timeframe.isNullOrBlank()
+        ) {
+
             result.clear()
-        } else {
-            result["timeframeMinutes"] = "5"
-            if (result["setupNumber"].isNullOrBlank()) result["setupNumber"] = "0"
         }
 
 
@@ -1227,11 +1234,18 @@ class MainActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         if (::webView.isInitialized) {
-            flushPendingSignals()
-            syncSignalHistoryFromFirestore()
-            syncMarketSnrFromFirestore()
             webView.onResume()
-            webView.evaluateJavascript("if(window.updateChart) window.updateChart();", null)
+            webView.resumeTimers()
+            // Reuse an existing TradingView widget; only retry if it did not initialize.
+            webView.postDelayed({
+                if (::webView.isInitialized && !isFinishing) {
+                    webView.evaluateJavascript(
+                        "if(typeof updateChart==='function') updateChart();",
+                        null
+                    )
+                    latestSnrPayload?.let { deliverMarketSnrToWebView(it, 0) }
+                }
+            }, 250L)
         }
     }
 
@@ -1242,10 +1256,9 @@ class MainActivity : AppCompatActivity() {
 
     override fun onDestroy() {
 
-        historyListener?.remove()
-        historyListener = null
         snrListener?.remove()
         snrListener = null
+        mainHandler.removeCallbacksAndMessages(null)
 
         if (
             activeInstance?.get() === this
