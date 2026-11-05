@@ -1225,7 +1225,6 @@ SEBU DOLLAR AI — INSTITUTIONAL FLOW ENGINE
 
 </div>
 
-<script src="https://s3.tradingview.com/tv.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/microsoft-signalr/8.0.7/signalr.min.js"></script>
 
 <script>
@@ -1901,7 +1900,15 @@ function mergeFirestoreSignalHistory(payload){
         Number(historyClearBoundaryCloseTime)||0,
         Number(serverHistoryBoundaryCloseTime)||0
       );
-      if(Number.isFinite(closeTime) && closeTime<=effectiveBoundary) continue;
+      const createdRaw=row.createdAt;
+      const createdAtMs=Number.isFinite(Number(createdRaw))
+        ? Number(createdRaw)
+        : Date.parse(String(createdRaw||""));
+      // The clear boundary applies to when the server signal was created,
+      // not its candle-open/close timestamp. This preserves a newly delivered
+      // signal whose scanner publication was slightly delayed.
+      const historyTime=Number.isFinite(createdAtMs)?createdAtMs:closeTime;
+      if(Number.isFinite(historyTime) && historyTime<=effectiveBoundary) continue;
       const rawStatus=String(row.resultStatus||row.status||"SENT").toUpperCase();
       const key=getSignalHistorySyncKey({setupNumber,timeframeMinutes,type,candleTime});
       const previous=byKey.get(key);
@@ -1921,6 +1928,7 @@ function mergeFirestoreSignalHistory(payload){
         pips:Math.abs(entry-sl),candleTime,candleCloseTime:closeTime,
         timeframeMinutes,timeframe,setupNumber,
         setupName:"M5 SNR ENGINE",
+        createdAt:Number.isFinite(createdAtMs)?createdAtMs:null,
         signalKey:key,
         closePrice:Number(row.closePrice)||previous?.closePrice||null,
         closedAt:Number(row.closedAt)||previous?.closedAt||null
@@ -1948,9 +1956,11 @@ function updateMarketSnr(payload){
     if(!data||String(data.timeframe||"").toUpperCase()!=="M5") return "INVALID";
     const set=(id,value)=>{
       const el=$(id); if(!el) return;
+      const missing=value===null||value===undefined||value==="";
       const n=Number(value);
-      el.textContent=Number.isFinite(n)?n.toFixed(2):"BELUM TERSEDIA";
-      el.className=Number.isFinite(n)?"v":"v wait";
+      const valid=!missing&&Number.isFinite(n)&&n>0;
+      el.textContent=valid?n.toFixed(2):"MENUNGGU DATA";
+      el.className=valid?"v":"v wait";
     };
     set("snrH4Resistance",data.h4Resistance);
     set("snrH4Support",data.h4Support);
@@ -2483,6 +2493,7 @@ function receiveNativeSignal(payload){
     return "ERROR";
   }
 }
+window.receiveNativeSignal=receiveNativeSignal;
 
 
 /* VALID SIGNAL */
@@ -2594,10 +2605,12 @@ calcLot();
 const signalKey=
 String(res.setupNumber||0)+"_"+String(res.timeframeMinutes||5)+"_"+res.type+"_"+res.candleTime;
 
-if(lastSignalKey===signalKey){
-
-return;
-
+if(lastSignalKey===signalKey || signalHistory.some(s=>s && getSignalHistorySyncKey(s)===signalKey)){
+  lastSignalKey=signalKey;
+  activeSetupKey=signalKey;
+  const existing=signalHistory.find(s=>s && getSignalHistorySyncKey(s)===signalKey);
+  if(existing && existing.status==="PENDING") renderActivePendingSignal(existing);
+  return;
 }
 
 lastSignalKey=signalKey;
@@ -2982,56 +2995,104 @@ async function checkPendingSignals(candleData=null){
 /* SERVER-AUTHORITATIVE SCANNER: browser does not generate trading signals. */
 async function autonomousMarketScanner(){ return false; }
 
-function updateChart(){
+let tradingViewLoadPromise=null;
+let tradingViewWidgetGeneration=0;
 
-const tf=$("tf").value;
-
-const chartContainer=$("tv_chart");
-
-chartContainer.innerHTML="";
-
-try{
-
-new TradingView.widget({
-
-container_id:"tv_chart",
-
-width:"100%",
-
-height:"450",
-
-symbol:"OANDA:XAUUSD",
-
-interval:tf,
-
-timezone:"Asia/Jakarta",
-
-theme:"dark",
-
-style:"1",
-
-locale:"id",
-
-toolbar_bg:"#0b1329",
-
-enable_publishing:false,
-
-hide_side_toolbar:false,
-
-allow_symbol_change:true
-
-});
-
-}catch(e){
-
-console.warn(
-"TradingView widget error:",
-e
-);
-
+function renderTradingViewIframeFallback(container, interval){
+  const query=new URLSearchParams({
+    symbol:"OANDA:XAUUSD",
+    interval:String(interval||"5"),
+    theme:"dark",
+    style:"1",
+    timezone:"Asia/Jakarta",
+    locale:"id",
+    toolbarbg:"0b1329",
+    hidesidetoolbar:"0",
+    symboledit:"1",
+    saveimage:"0",
+    hideideas:"1"
+  });
+  const frame=document.createElement("iframe");
+  frame.title="TradingView OANDA XAUUSD";
+  frame.src="https://www.tradingview.com/widgetembed/?"+query.toString();
+  frame.width="100%";
+  frame.height="450";
+  frame.style.cssText="display:block;width:100%;height:450px;border:0;border-radius:14px;background:#0b1329";
+  frame.setAttribute("allowfullscreen","true");
+  frame.setAttribute("loading","eager");
+  container.replaceChildren(frame);
+  container.dataset.chartFallback="iframe";
+  return true;
 }
 
+function loadTradingViewLibrary(){
+  if(window.TradingView&&typeof window.TradingView.widget==="function") return Promise.resolve(true);
+  if(tradingViewLoadPromise) return tradingViewLoadPromise;
+  tradingViewLoadPromise=new Promise((resolve,reject)=>{
+    const script=document.createElement("script");
+    script.src="https://s3.tradingview.com/tv.js";
+    script.async=true;
+    script.onload=()=>resolve(!!(window.TradingView&&typeof window.TradingView.widget==="function"));
+    script.onerror=()=>reject(new Error("TradingView tv.js gagal dimuat"));
+    document.head.appendChild(script);
+  }).finally(()=>{ tradingViewLoadPromise=null; });
+  return tradingViewLoadPromise;
 }
+
+async function updateChart(){
+  const tf=$("tf")?.value||"5";
+  const chartContainer=$("tv_chart");
+  if(!chartContainer) return false;
+  const generation=++tradingViewWidgetGeneration;
+  chartContainer.innerHTML="";
+  chartContainer.style.minHeight="450px";
+  chartContainer.style.width="100%";
+  try{
+    let ready=!!(window.TradingView&&typeof window.TradingView.widget==="function");
+    if(!ready){
+      for(let attempt=0;attempt<2&&!ready;attempt++){
+        try{ ready=await loadTradingViewLibrary(); }
+        catch(error){
+          console.warn("TradingView library load attempt failed:",error);
+          if(attempt===1) throw error;
+          await new Promise(resolve=>setTimeout(resolve,900));
+        }
+      }
+    }
+    if(generation!==tradingViewWidgetGeneration) return false;
+    if(!ready||!window.TradingView||typeof window.TradingView.widget!=="function"){
+      throw new Error("TradingView widget belum tersedia di WebView");
+    }
+    new window.TradingView.widget({
+      container_id:"tv_chart",
+      width:"100%",
+      height:450,
+      symbol:"OANDA:XAUUSD",
+      interval:tf,
+      timezone:"Asia/Jakarta",
+      theme:"dark",
+      style:"1",
+      locale:"id",
+      toolbar_bg:"#0b1329",
+      enable_publishing:false,
+      hide_side_toolbar:false,
+      allow_symbol_change:true,
+      autosize:true
+    });
+    return true;
+  }catch(error){
+    console.error("TradingView widget failed; trying iframe fallback:",error);
+    chartContainer.dataset.chartError=String(error?.message||error);
+    try{
+      return renderTradingViewIframeFallback(chartContainer,tf);
+    }catch(fallbackError){
+      console.error("TradingView iframe fallback failed:",fallbackError);
+      return false;
+    }
+  }
+}
+window.updateChart=updateChart;
+
 
 
 /* AUDIO + NOTIFICATIONS */
