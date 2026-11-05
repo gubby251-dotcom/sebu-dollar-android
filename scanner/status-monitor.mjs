@@ -5,7 +5,7 @@ import { getMessaging } from "firebase-admin/messaging";
 
 const CANDLE_API_URL = "https://biquote.io/api/XAUUSD/ohlc";
 const TOPIC = "sebu_signal_users";
-const TF_MINUTES = { M30: 30, M15: 15 };
+const TF_MINUTES = { M5: 5 };
 const COLLECTION = "sent_signals";
 
 function initializeFirebase() {
@@ -101,74 +101,17 @@ function normalizeCandles(payload) {
 ======================================================= */
 
 function isActiveSetup(doc) {
-  const rawSetup = doc?.setupNumber ?? doc?.setup;
-  const setupNumber = Number(String(rawSetup ?? "").replace(/^SETUP\s*/i, "").trim());
-  const rawTimeframe = String(doc?.timeframe ?? "").trim().toUpperCase();
-  const minutes = Number(doc?.timeframeMinutes);
-
-  const timeframeFromMinutes = minutes === 30 ? "M30" : minutes === 15 ? "M15" : null;
-  const timeframeFromField = TF_MINUTES[rawTimeframe] ? rawTimeframe : null;
-
-  // Reject contradictory or explicitly unsupported timeframe metadata.
-  if (rawTimeframe && !timeframeFromField) return false;
-  if (Number.isFinite(minutes) && minutes > 0 && !timeframeFromMinutes) return false;
-  if (timeframeFromField && timeframeFromMinutes && timeframeFromField !== timeframeFromMinutes) return false;
-
-  const timeframe = timeframeFromField || timeframeFromMinutes;
-  if (setupNumber === 1 || setupNumber === 2) {
-    return !timeframe || timeframe === "M30";
-  }
-  if (setupNumber === 3) {
-    return !timeframe || timeframe === "M15";
-  }
-  return false;
+  return String(doc?.source || '') === 'M5_SNR_ENGINE' &&
+    String(doc?.timeframe || '').toUpperCase() === 'M5' &&
+    Number(doc?.timeframeMinutes) === 5;
 }
 
 /* =======================================================
    TIMEFRAME RESOLVER
 ======================================================= */
 
-function getTimeframe(doc, documentId = "") {
-  const raw = String(doc.timeframe || "")
-    .trim()
-    .toUpperCase();
-
-  if (TF_MINUTES[raw]) {
-    return raw;
-  }
-
-  const idPrefix = String(documentId)
-    .trim()
-    .toUpperCase()
-    .match(/^(M30|M15)_/);
-
-  if (idPrefix && TF_MINUTES[idPrefix[1]]) {
-    return idPrefix[1];
-  }
-
-  const minutes = Number(doc.timeframeMinutes);
-
-  const minutesMatch = Object.entries(TF_MINUTES)
-    .find(([, value]) => value === minutes);
-
-  if (minutesMatch) {
-    return minutesMatch[0];
-  }
-
-  const setupNumber = Number(doc.setupNumber);
-
-  // Fallback only when older documents lack timeframe metadata.
-  // Current active mapping: Setup 1/2 = M30, Setup 3 = M15.
-  // Legacy Setup 4/5 and M5 documents are not monitored as active signals.
-  if ([1, 2].includes(setupNumber)) {
-    return "M30";
-  }
-
-  if (setupNumber === 3) {
-    return "M15";
-  }
-
-  return null;
+function getTimeframe(doc) {
+  return isActiveSetup(doc) ? 'M5' : null;
 }
 
 /* =======================================================
@@ -178,25 +121,15 @@ function getTimeframe(doc, documentId = "") {
 async function fetchClosedCandles(timeframe, now) {
   const minutes = TF_MINUTES[timeframe];
   const url = `${CANDLE_API_URL}?interval=${minutes}m&limit=80`;
-
   const response = await fetch(url, {
     headers: { accept: "application/json" },
     signal: AbortSignal.timeout(15000)
   });
-
-  if (!response.ok) {
-    throw new Error(
-      `BiQuote ${timeframe} HTTP ${response.status}`
-    );
-  }
-
+  if (!response.ok) throw new Error(`BiQuote ${timeframe} HTTP ${response.status}`);
   const candles = normalizeCandles(await response.json());
   const tfMs = minutes * 60 * 1000;
-
-  return candles.filter((c) =>
-    c.time % tfMs === 0 &&
-    c.time + tfMs <= now
-  );
+  // Includes the live M5 candle so range touches can be detected between closes.
+  return candles.filter(c => c.time % tfMs === 0 && c.time <= now && c.time + tfMs > now || c.time % tfMs === 0 && c.time + tfMs <= now);
 }
 
 /* =======================================================
@@ -245,7 +178,7 @@ function evaluateSignal(doc, candles, now, timeframe) {
   const relevant = candles.filter((c) =>
     c.time >= startTime &&
     c.time >= signalClose &&
-    c.time + tfMs <= now
+    c.time <= now
   );
 
   let firstAmbiguousAt = null;
@@ -331,7 +264,6 @@ async function publishStatus(
   result,
   timeframe
 ) {
-  const setup = String(doc.setupNumber ?? "");
 
   const signalTime = normalizeTime(doc.candleTime);
   const storedCloseTime = normalizeTime(doc.candleCloseTime);
@@ -343,13 +275,11 @@ async function publishStatus(
   const payload = {
     event: "STATUS_UPDATE",
     title: "SEBU DOLLAR AI — STATUS SIGNAL",
-    body: `Setup ${setup} ${timeframe}: ${status}`,
+    body: `SEBU DOLLAR AI — XAUUSD ${timeframe}: ${status}`,
     status,
     type: String(doc.type || "").toUpperCase(),
     timeframe,
     timeframeMinutes: String(TF_MINUTES[timeframe]),
-    setup,
-    setupNumber: setup,
     candleTime: String(signalTime),
     candleCloseTime: String(candleCloseTime),
     closePrice: String(result.closePrice ?? ""),
