@@ -214,3 +214,37 @@ test('a wick-only touch does not retire locked M5 support', () => {
   assert.equal(result.support.price,95);
   assert.equal(result.support.touched,true);
 });
+
+
+test('H4 closed-candle filter accepts BiQuote session timestamps not aligned to UTC 4-hour epoch', () => {
+  const sessionStart = Date.UTC(2026, 10, 5, 1, 0, 0); // deliberately not divisible by 4h
+  const rows = [
+    { time: sessionStart, open: 100, high: 125, low: 95, close: 115 },
+    { time: sessionStart + TF_MS.H4, open: 115, high: 130, low: 105, close: 120 }
+  ];
+  const beforeNextClose = closedCandles(rows, TF_MS.H4, sessionStart + 2 * TF_MS.H4 - 1);
+  assert.equal(beforeNextClose.length, 1);
+  const afterNextClose = closedCandles(rows, TF_MS.H4, sessionStart + 2 * TF_MS.H4);
+  assert.equal(afterNextClose.length, 2);
+  const levels = detectH4Snr(afterNextClose);
+  assert.equal(levels.resistance, 130);
+  assert.equal(levels.support, 105);
+  assert.equal(levels.candleTime, sessionStart + TF_MS.H4);
+});
+
+test('locked M5 level records a wick touch on the newest closed candle', () => {
+  const rows = [
+    candle(10, 100, 105, 96, 102),
+    candle(11, 102, 106, 97, 103),
+    candle(12, 103, 107, 98, 104),
+    candle(13, 104, 108, 94, 105)
+  ];
+  const detected = {
+    supportCandidates: [{ price: 95, time: base }],
+    resistanceCandidates: [{ price: 120, time: base }]
+  };
+  const previous = { support: { price: 95, time: base, touched: false }, resistance: { price: 120, time: base, touched: false } };
+  const result = resolveLockedM5Snr(rows, 105, detected, previous);
+  assert.equal(result.support.price, 95);
+  assert.equal(result.support.touched, true);
+});
