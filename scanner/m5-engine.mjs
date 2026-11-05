@@ -55,6 +55,8 @@ export function detectM5Snr(m5Candles, currentPrice, leftRight = 2) {
     resistanceTime: resistances[0]?.time ?? null,
     support: supports[0]?.price ?? null,
     supportTime: supports[0]?.time ?? null,
+    resistanceLevels: highs.map(x => x.price).sort((a,b) => a-b),
+    supportLevels: lows.map(x => x.price).sort((a,b) => b-a),
     source: 'M5_CONFIRMED_SWING_2x2'
   };
 }
@@ -62,24 +64,79 @@ export function detectM5Snr(m5Candles, currentPrice, leftRight = 2) {
 const bullish = c => c.close > c.open;
 const bearish = c => c.close < c.open;
 
-export function evaluateM5Rejection(m5Candles, { h4Snr, m5Snr } = {}) {
-  const c = normalizeCandles(m5Candles);
-  if (c.length < 4 || !h4Snr || !m5Snr) return null;
-  const beforeC1 = c.at(-3), c1 = c.at(-2), c2 = c.at(-1);
-  // BUY is the exact inverse of SELL. C2 is required to be a closed candle by caller.
-  const sellPattern = bullish(beforeC1) && bullish(c.at(-4)) && bearish(c1) && bearish(c2) && c2.close < c1.low;
-  const buyPattern = bearish(beforeC1) && bearish(c.at(-4)) && bullish(c1) && bullish(c2) && c2.close > c1.high;
-  const atResistance = [h4Snr.resistance, m5Snr.resistance].some(level => Number.isFinite(Number(level)) && c1.high >= Number(level) && c1.low <= Number(level));
-  const atSupport = [h4Snr.support, m5Snr.support].some(level => Number.isFinite(Number(level)) && c1.low <= Number(level) && c1.high >= Number(level));
-  if (!sellPattern && !buyPattern) return null;
-  if (sellPattern && !atResistance) return null;
-  if (buyPattern && !atSupport) return null;
-  const type = buyPattern ? 'BUY' : 'SELL';
-  const entry = c2.close;
-  const sl = type === 'BUY' ? Math.min(c1.low, beforeC1.low) : Math.max(c1.high, beforeC1.high);
+function validRiskSignal(type, entry, sl, candle, pattern) {
   const risk = type === 'BUY' ? entry - sl : sl - entry;
   if (!(risk > 0) || !Number.isFinite(risk)) return null;
   const tp = type === 'BUY' ? entry + risk : entry - risk;
-  if (!Number.isFinite(tp) || (type === 'BUY' ? !(sl < entry && tp > entry) : !(sl > entry && tp < entry))) return null;
-  return { type, timeframe: 'M5', timeframeMinutes: 5, entry, sl, tp, riskDistance: risk, rr: 1, candleTime: c2.time, candleCloseTime: c2.time + TF_MS.M5, c1Time: c1.time, pattern: 'SNR_REJECTION_C1_C2' };
+  if (!Number.isFinite(tp)) return null;
+  return {
+    type, timeframe: 'M5', timeframeMinutes: 5, entry, sl, tp,
+    riskDistance: risk, rr: 1, candleTime: candle.time,
+    candleCloseTime: candle.time + TF_MS.M5, pattern
+  };
+}
+
+function touches(level, candle) {
+  return Number.isFinite(Number(level)) && candle.low <= Number(level) && candle.high >= Number(level);
+}
+
+/**
+ * Rejection reversal:
+ * two candles in the approach direction, C1 reverses, C2 confirms beyond
+ * C1's wick. C2 is the latest closed candle supplied by the caller.
+ */
+export function evaluateM5Rejection(m5Candles, { h4Snr, m5Snr } = {}) {
+  const c = normalizeCandles(m5Candles);
+  if (c.length < 4 || !h4Snr || !m5Snr) return null;
+  const approach = c.at(-4), beforeC1 = c.at(-3), c1 = c.at(-2), c2 = c.at(-1);
+  const sellPattern = bullish(approach) && bullish(beforeC1) && bearish(c1) && bearish(c2) && c2.open >= c1.low && c2.close < c1.low;
+  const buyPattern = bearish(approach) && bearish(beforeC1) && bullish(c1) && bullish(c2) && c2.open <= c1.high && c2.close > c1.high;
+  const atResistance = [h4Snr.resistance, m5Snr.resistance].some(level => touches(level, c1));
+  const atSupport = [h4Snr.support, m5Snr.support].some(level => touches(level, c1));
+  if (sellPattern && atResistance) return validRiskSignal('SELL', c2.close, Math.max(c1.high, beforeC1.high), c2, 'M5_SNR_REJECTION_C1_C2');
+  if (buyPattern && atSupport) return validRiskSignal('BUY', c2.close, Math.min(c1.low, beforeC1.low), c2, 'M5_SNR_REJECTION_C1_C2');
+  return null;
+}
+
+/**
+ * Breakout/retest confirmation. A closed candle must break a level, a later
+ * candle must retest and hold it, then C1/C2 confirm in the breakout direction.
+ * C1 is the first directional candle after retest; C2 must close beyond C1 wick.
+ */
+export function evaluateM5BreakoutRetest(m5Candles, { h4Snr, m5Snr } = {}) {
+  const c = normalizeCandles(m5Candles);
+  if (c.length < 5 || !h4Snr || !m5Snr) return null;
+  const c2 = c.at(-1), c1 = c.at(-2), retest = c.at(-3);
+  const history = c.slice(0, -3);
+  const resistanceLevels = [...new Set([h4Snr.resistance, m5Snr.resistance, ...(m5Snr.resistanceLevels || [])].map(Number).filter(Number.isFinite))];
+  const supportLevels = [...new Set([h4Snr.support, m5Snr.support, ...(m5Snr.supportLevels || [])].map(Number).filter(Number.isFinite))];
+
+  // BUY only follows a confirmed resistance break, hold above, retest, then C1/C2 confirmation.
+  if (bullish(c1) && bullish(c2) && c2.close > c1.high) {
+    for (const level of resistanceLevels) {
+      const breakIndex = history.findIndex(x => x.close > level && x.open <= level);
+      if (breakIndex < 0) continue;
+      const held = history.slice(breakIndex + 1).every(x => x.close >= level);
+      if (!held || retest.low > level || retest.close < level || c1.close < level || c2.close <= level) continue;
+      const signal = validRiskSignal('BUY', c2.close, Math.min(c1.low, retest.low), c2, 'M5_SNR_BREAKOUT_RETEST');
+      if (signal) return signal;
+    }
+  }
+
+  // SELL only follows a confirmed support break, hold below, retest, then C1/C2 confirmation.
+  if (bearish(c1) && bearish(c2) && c2.close < c1.low) {
+    for (const level of supportLevels) {
+      const breakIndex = history.findIndex(x => x.close < level && x.open >= level);
+      if (breakIndex < 0) continue;
+      const held = history.slice(breakIndex + 1).every(x => x.close <= level);
+      if (!held || retest.high < level || retest.close > level || c1.close > level || c2.close >= level) continue;
+      const signal = validRiskSignal('SELL', c2.close, Math.max(c1.high, retest.high), c2, 'M5_SNR_BREAKOUT_RETEST');
+      if (signal) return signal;
+    }
+  }
+  return null;
+}
+
+export function evaluateM5Signal(m5Candles, levels) {
+  return evaluateM5Rejection(m5Candles, levels) || evaluateM5BreakoutRetest(m5Candles, levels);
 }
