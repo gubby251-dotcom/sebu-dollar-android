@@ -55,16 +55,17 @@ class SignalMessagingService : FirebaseMessagingService() {
          * RELIABLE SCANNER → MAIN ACTIVITY
          * =====================================================
          *
-         * Data Entry / SL / TP / Setup / Timeframe
+         * Data Entry / SL / TP / Timeframe
          * dikirim langsung ke MainActivity.
          *
          * Tidak ada validasi ulang di sini.
          */
-        if (message.data.isNotEmpty()) {
-
-            MainActivity.receiveNativeSignal(
-                message.data
-            )
+        when (message.data["event"]) {
+            "NEW_SIGNAL" -> MainActivity.receiveNativeSignal(message.data)
+            "STATUS_UPDATE" -> MainActivity.receiveNativeSignalStatusUpdate(message.data)
+            else -> {
+                // Ignore unknown event payloads; do not treat status as a new signal.
+            }
         }
 
 
