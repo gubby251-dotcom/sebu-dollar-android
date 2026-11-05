@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { normalizeCandles, closedCandles, detectH4Snr, detectM5Snr, evaluateM5Rejection, evaluateM5BreakoutRetest, evaluateM5Signal, TF_MS } from '../m5-engine.mjs';
+import { normalizeCandles, closedCandles, detectH4Snr, detectM5Snr, evaluateM5Rejection, evaluateM5BreakoutRetest, evaluateM5Signal, resolveLockedM5Snr, TF_MS } from '../m5-engine.mjs';
 
 const base = Date.UTC(2026, 0, 1, 0, 0, 0);
 const candle = (i, o, h, l, c) => ({ time: base + i * TF_MS.M5, open:o, high:h, low:l, close:c });
@@ -142,4 +142,75 @@ test('SELL breakout-retest is active through the combined M5 signal dispatcher',
   assert.equal(signal.pattern, 'M5_SNR_BREAKOUT_RETEST');
   assert.equal(signal.entry, 93);
   assert.equal(signal.rr, 1);
+});
+
+
+test('locked M5 SNR moves to a newer closer untouched market-structure level', () => {
+  const rows = [
+    candle(3,100,109,97,102),
+    candle(4,102,108,98,103),
+    candle(5,103,107,99,104)
+  ];
+  const detected = {
+    supportCandidates: [{price:90,time:base},{price:96,time:base+2*TF_MS.M5}],
+    resistanceCandidates: [{price:120,time:base},{price:112,time:base+2*TF_MS.M5}]
+  };
+  const previous = {
+    support:{price:90,time:base,touched:false},
+    resistance:{price:120,time:base,touched:false}
+  };
+  const result = resolveLockedM5Snr(rows,104,detected,previous);
+  assert.equal(result.support.price,96);
+  assert.equal(result.resistance.price,112);
+  assert.equal(result.support.touched,false);
+  assert.equal(result.resistance.touched,false);
+});
+
+test('a wick touch locks the existing M5 SNR and blocks structure-only replacement', () => {
+  const rows = [
+    candle(2,100,108,90,102), // wick touches old support 95
+    candle(3,102,109,97,104),
+    candle(4,104,110,98,105)
+  ];
+  const detected = {
+    supportCandidates:[{price:95,time:base},{price:99,time:base+TF_MS.M5}],
+    resistanceCandidates:[{price:120,time:base}]
+  };
+  const previous = {
+    support:{price:95,time:base,touched:false},
+    resistance:{price:120,time:base,touched:false}
+  };
+  const result = resolveLockedM5Snr(rows,105,detected,previous);
+  assert.equal(result.support.price,95);
+  assert.equal(result.support.touched,true);
+});
+
+test('a body close through locked M5 support retires it and selects the next untouched support', () => {
+  const rows = [
+    candle(2,100,108,94,101),
+    candle(3,101,106,92,99),
+    candle(4,99,103,89,90), // wick below 95 but close still at 90: body crosses from above
+    candle(5,90,94,88,91),
+    candle(6,91,96,90,93)
+  ];
+  const detected = {
+    supportCandidates:[{price:95,time:base},{price:85,time:base+TF_MS.M5}],
+    resistanceCandidates:[]
+  };
+  const previous = {support:{price:95,time:base,touched:true},resistance:null};
+  const result = resolveLockedM5Snr(rows,93,detected,previous);
+  assert.equal(result.support.price,85);
+});
+
+test('a wick-only touch does not retire locked M5 support', () => {
+  const rows = [
+    candle(2,100,108,94,101), // wick through 95, body remains above
+    candle(3,101,107,96,102),
+    candle(4,102,108,97,104)
+  ];
+  const detected = {supportCandidates:[{price:95,time:base},{price:90,time:base+TF_MS.M5}],resistanceCandidates:[]};
+  const previous = {support:{price:95,time:base,touched:false},resistance:null};
+  const result = resolveLockedM5Snr(rows,104,detected,previous);
+  assert.equal(result.support.price,95);
+  assert.equal(result.support.touched,true);
 });
