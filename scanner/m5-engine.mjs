@@ -73,7 +73,85 @@ export function detectM5Snr(m5Candles, currentPrice, leftRight = 2) {
     supportTime: supports[0]?.time ?? null,
     resistanceLevels: activeHighs.map(x => x.price).sort((a,b) => a-b),
     supportLevels: activeLows.map(x => x.price).sort((a,b) => b-a),
+    resistanceCandidates: activeHighs,
+    supportCandidates: activeLows,
     source: 'M5_CONFIRMED_SWING_2x2'
+  };
+}
+
+/**
+ * Stateful M5 SNR selection.
+ * - Keep the current level until a later candle body closes through it.
+ * - Record wick touches without treating them as breaks.
+ * - Before first touch, allow a newer, closer confirmed structure to replace it.
+ * - A replacement candidate must itself remain untouched after its pivot.
+ * Persist the returned state between scanner runs.
+ */
+export function resolveLockedM5Snr(m5Candles, currentPrice, detected, previousState = {}) {
+  const candles = normalizeCandles(m5Candles);
+  const price = Number(currentPrice);
+  const candidates = detected || {};
+  const isTouchedAfter = (candidate, side) => candles.some(c =>
+    c.time > candidate.time &&
+    (side === 'support' ? c.low <= candidate.price : c.high >= candidate.price)
+  );
+  const isBrokenAfter = (level, side) => candles.some(c =>
+    c.time > level.time &&
+    (side === 'support'
+      ? c.open >= level.price && c.close < level.price
+      : c.open <= level.price && c.close > level.price)
+  );
+
+  function resolveSide(side) {
+    const candidateKey = side === 'support' ? 'supportCandidates' : 'resistanceCandidates';
+    const candidatesForSide = Array.isArray(candidates[candidateKey]) ? candidates[candidateKey] : [];
+    const isCloser = (candidate, current) => side === 'support'
+      ? candidate.price > current.price && candidate.price < price
+      : candidate.price < current.price && candidate.price > price;
+    const nearest = list => [...list].sort((a, b) =>
+      side === 'support' ? b.price - a.price : a.price - b.price
+    )[0] || null;
+
+    let locked = previousState?.[side] && Number.isFinite(Number(previousState[side].price))
+      ? { price: Number(previousState[side].price), time: Number(previousState[side].time), touched: Boolean(previousState[side].touched) }
+      : null;
+
+    const validUntouched = candidatesForSide.filter(x =>
+      Number.isFinite(Number(x.price)) && Number.isFinite(Number(x.time)) &&
+      (side === 'support' ? x.price < price : x.price > price) &&
+      !isBrokenAfter(x, side) && !isTouchedAfter(x, side)
+    );
+
+    if (locked && isBrokenAfter(locked, side)) locked = null;
+
+    if (!locked) {
+      const next = nearest(validUntouched);
+      return next ? { price: next.price, time: next.time, touched: false } : null;
+    }
+
+    const touched = locked.touched || isTouchedAfter(locked, side);
+    if (!touched) {
+      const newerCloser = validUntouched.filter(x => x.time > locked.time && isCloser(x, locked));
+      const next = nearest(newerCloser);
+      if (next) return { price: next.price, time: next.time, touched: false };
+    }
+    return { ...locked, touched };
+  }
+
+  const support = resolveSide('support');
+  const resistance = resolveSide('resistance');
+  return {
+    support,
+    resistance,
+    snr: {
+      support: support?.price ?? null,
+      supportTime: support?.time ?? null,
+      resistance: resistance?.price ?? null,
+      resistanceTime: resistance?.time ?? null,
+      supportLevels: support ? [support.price] : [],
+      resistanceLevels: resistance ? [resistance.price] : [],
+      source: 'M5_LOCKED_CONFIRMED_STRUCTURE'
+    }
   };
 }
 
