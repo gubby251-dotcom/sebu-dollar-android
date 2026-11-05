@@ -1947,8 +1947,10 @@ function updateMarketSnr(payload){
     if(!data) return "INVALID";
     // One Firestore document contains both H4 and M5 levels.
     // Its single timeframe metadata must not reject the combined payload.
+    const ids=["snrH4Resistance","snrH4Support","snrM5Resistance","snrM5Support"];
+    if(ids.some(id=>!$(id))) return "ELEMENTS_NOT_READY";
     const set=(id,value)=>{
-      const el=$(id); if(!el) return;
+      const el=$(id);
       const n=(value===null||value===undefined||value==="")?NaN:Number(value);
       el.textContent=Number.isFinite(n)?n.toFixed(2):"BELUM TERSEDIA";
       el.className=Number.isFinite(n)?"v":"v wait";
