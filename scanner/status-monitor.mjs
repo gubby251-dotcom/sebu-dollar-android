@@ -94,10 +94,8 @@ function normalizeCandles(payload) {
 }
 
 /* =======================================================
-   ACTIVE SETUP GUARD
-   Only Setup 1/2 on M30 and Setup 3 on M15 are active.
-   This guard runs before timeframe resolution so old documents
-   cannot be monitored just because they still contain M30/M15 metadata.
+   M5-ONLY SIGNAL GUARD
+   Historical documents from removed strategies are ignored.
 ======================================================= */
 
 function isActiveSetup(doc) {
@@ -184,14 +182,14 @@ function evaluateSignal(doc, candles, now, timeframe) {
   let firstAmbiguousAt = null;
 
   for (const candle of relevant) {
-    // Confirm Entry only when the closed candle range actually contains it.
+    // Includes the live M5 candle range as well as closed candles.
     // A candle entirely beyond Entry cannot prove the Entry was traded.
     const entryHit = candle.low <= entry && candle.high >= entry;
 
     if (!entryTouched) {
       if (entryHit) {
         entryTouched = true;
-        entryTouchedAt = candle.time + tfMs;
+        entryTouchedAt = candle.time;
       }
 
       // Tidak menebak urutan Entry dan TP/SL
@@ -199,9 +197,9 @@ function evaluateSignal(doc, candles, now, timeframe) {
       continue;
     }
 
-    // Candle Entry pertama tidak dipakai untuk
-    // menentukan hasil TP/SL.
-    if (entryTouchedAt && candle.time < entryTouchedAt) {
+    // The candle that first confirms Entry is excluded from TP/SL ordering;
+    // intrabar order is unknown without tick sequencing.
+    if (entryTouchedAt && candle.time <= entryTouchedAt) {
       continue;
     }
 
@@ -251,6 +249,48 @@ function evaluateSignal(doc, candles, now, timeframe) {
   }
 
   return { entryTouched, entryTouchedAt };
+}
+
+/* =======================================================
+   PUBLISH ENTRY TOUCH (durable + idempotent)
+======================================================= */
+async function publishEntryTouch(doc, documentId, result, timeframe) {
+  const db = getFirestore();
+  const ref = db.collection(COLLECTION).doc(documentId);
+  const payload = {
+    event: "STATUS_UPDATE",
+    title: "SEBU DOLLAR AI — ENTRY",
+    body: `SEBU DOLLAR AI — XAUUSD ${timeframe}: ENTRY TERSENTUH`,
+    status: "ENTRY",
+    type: String(doc.type || "").toUpperCase(),
+    timeframe,
+    timeframeMinutes: String(TF_MINUTES[timeframe]),
+    candleTime: String(normalizeTime(doc.candleTime)),
+    candleCloseTime: String(normalizeTime(doc.candleCloseTime)),
+    entryTouchedAt: String(result.entryTouchedAt ?? ""),
+    signalKey: documentId
+  };
+  const committed = await db.runTransaction(async tx => {
+    const fresh = await tx.get(ref);
+    if (!fresh.exists || fresh.get("entryNotificationSentAt") || fresh.get("entryNotificationPending")) return false;
+    tx.update(ref, {
+      entryTouched: true,
+      entryTouchedAt: result.entryTouchedAt ?? null,
+      entryNotificationPending: true,
+      statusNotificationPending: true,
+      statusNotificationPayload: payload,
+      entryNotificationPreparedAt: new Date().toISOString()
+    });
+    return true;
+  });
+  if (!committed) return;
+  try {
+    await getMessaging().send({ topic: TOPIC, data: payload, android: { priority: "high", ttl: 60 * 60 * 1000 } });
+    await ref.update({ entryNotificationPending: false, entryNotificationSentAt: new Date().toISOString(), statusNotificationPending: false, statusNotificationSentAt: new Date().toISOString() });
+    console.log(`ENTRY ${documentId}: FCM accepted`);
+  } catch (error) {
+    console.error(`ENTRY ${documentId}: FCM failed; retry pending:`, error?.message || error);
+  }
 }
 
 /* =======================================================
@@ -338,6 +378,36 @@ async function publishStatus(
 }
 
 /* =======================================================
+   RETRY DURABLE STATUS NOTIFICATIONS
+======================================================= */
+async function retryPendingStatusNotifications(db) {
+  const pending = await db.collection(COLLECTION)
+    .where('statusNotificationPending', '==', true).limit(100).get();
+  for (const item of pending.docs) {
+    const ref = item.ref;
+    const claim = await db.runTransaction(async tx => {
+      const fresh = await tx.get(ref);
+      if (!fresh.exists || fresh.get('statusNotificationPending') !== true) return null;
+      const sendingAt = Date.parse(String(fresh.get('statusNotificationSendingAt') || '')) || 0;
+      if (fresh.get('statusNotificationSending') === true && Date.now() - sendingAt < 180000) return null;
+      const payload = fresh.get('statusNotificationPayload');
+      if (!payload || !['ENTRY', 'HIT TP', 'HIT SL'].includes(String(payload.status).toUpperCase())) return null;
+      tx.update(ref, { statusNotificationSending: true, statusNotificationSendingAt: new Date().toISOString(), statusNotificationAttemptAt: new Date().toISOString() });
+      return payload;
+    });
+    if (!claim) continue;
+    try {
+      await getMessaging().send({ topic: TOPIC, data: claim, android: { priority: 'high', ttl: 60 * 60 * 1000 } });
+      await ref.update({ statusNotificationPending: false, entryNotificationPending: false, statusNotificationSending: false, statusNotificationSendingAt: null, statusNotificationSentAt: new Date().toISOString(), ...(String(claim.status).toUpperCase() === 'ENTRY' ? { entryNotificationSentAt: new Date().toISOString() } : {}) });
+      console.log(`STATUS NOTIFICATION RETRIED ${item.id}`);
+    } catch (error) {
+      await ref.update({ statusNotificationSending: false, statusNotificationSendingAt: null, statusNotificationLastError: String(error?.message || error).slice(0, 500) });
+      console.error(`STATUS NOTIFICATION RETRY FAILED ${item.id}:`, error?.message || error);
+    }
+  }
+}
+
+/* =======================================================
    MAIN MONITOR
 ======================================================= */
 
@@ -345,6 +415,7 @@ async function main() {
   initializeFirebase();
 
   const db = getFirestore();
+  await retryPendingStatusNotifications(db);
 
   const snapshot = await db
     .collection(COLLECTION)
@@ -364,8 +435,8 @@ async function main() {
 
     if (!isActiveSetup(doc)) {
       console.warn(
-        `Lewati ${item.id}: setup lama/tidak aktif ` +
-        `(setup=${doc.setupNumber ?? doc.setup}, timeframe=${doc.timeframe}).`
+        `Lewati ${item.id}: dokumen bukan sinyal M5 dari engine baru ` +
+        `(timeframe=${doc.timeframe}).`
       );
       continue;
     }
@@ -377,7 +448,7 @@ async function main() {
         `Lewati ${item.id}: timeframe tidak dikenal. ` +
         `timeframe=${doc.timeframe}, ` +
         `timeframeMinutes=${doc.timeframeMinutes}, ` +
-        `setupNumber=${doc.setupNumber}.`
+        `timeframeMinutes=${doc.timeframeMinutes}.`
       );
       continue;
     }
@@ -438,11 +509,8 @@ async function main() {
         result.entryTouched &&
         !doc.entryTouched
       ) {
-        await item.ref.update(update);
-
-        console.log(
-          `ENTRY TERSENTUH ${item.id}; pantau candle berikutnya.`
-        );
+        await publishEntryTouch(doc, item.id, result, timeframe);
+        console.log(`ENTRY TERSENTUH ${item.id}; status dan notifikasi dicatat.`);
       } else if (
         doc.timeframe !== timeframe ||
         Number(doc.timeframeMinutes) !== TF_MINUTES[timeframe]
