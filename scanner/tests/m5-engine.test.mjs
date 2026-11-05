@@ -52,3 +52,63 @@ test('signal risk and reward are equal (RR 1:1)', () => {
   const signal = evaluateM5Rejection(rows, {h4Snr:{resistance:107,support:90},m5Snr:{resistance:107,support:90}});
   assert.equal(signal.riskDistance, Math.abs(signal.tp - signal.entry));
 });
+
+
+test('M5 resistance is retired only after body crosses and closes above it', () => {
+  const rows = [
+    candle(0,100,104,98,102),
+    candle(1,102,107,100,105),
+    candle(2,105,110,103,106),
+    candle(3,106,108,102,104),
+    candle(4,104,107,101,103),
+    candle(5,108,112,107,111), // body opens below and closes above 110
+    candle(6,110,111,106,109)  // pullback below the broken level
+  ];
+  const levels = detectM5Snr(rows, 109, 2);
+  assert.equal(levels.resistanceLevels.includes(110), false);
+  assert.notEqual(levels.resistance, 110);
+  assert.ok(levels.brokenResistanceLevels.some(x => x.price === 110));
+});
+
+test('M5 wick-only probe does not retire resistance', () => {
+  const rows = [
+    candle(0,100,104,98,102),
+    candle(1,102,107,100,105),
+    candle(2,105,110,103,106),
+    candle(3,106,108,102,104),
+    candle(4,104,107,101,103),
+    candle(5,108,112,107,109), // wick above 110, body closes below
+    candle(6,109,110,106,108)
+  ];
+  const levels = detectM5Snr(rows, 108, 2);
+  assert.ok(levels.resistanceLevels.includes(110));
+  assert.equal(levels.brokenResistanceLevels.some(x => x.price === 110), false);
+});
+
+test('M5 support is retired only after body crosses and closes below it', () => {
+  const rows = [
+    candle(0,110,112,106,108),
+    candle(1,108,110,103,105),
+    candle(2,105,107,100,104),
+    candle(3,104,108,102,106),
+    candle(4,106,109,103,107),
+    candle(5,102,103,98,99), // body opens above and closes below 100
+    candle(6,100,104,99,102) // pullback above broken level
+  ];
+  const levels = detectM5Snr(rows, 102, 2);
+  assert.equal(levels.supportLevels.includes(100), false);
+  assert.notEqual(levels.support, 100);
+  assert.ok(levels.brokenSupportLevels.some(x => x.price === 100));
+});
+
+
+test('M5 breakout levels are sourced only from M5 SNR, not H4 levels', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const source = await readFile(new URL('../m5-engine.mjs', import.meta.url), 'utf8');
+  const breakout = source.split('export function evaluateM5BreakoutRetest')[1]
+    .split('export function evaluateM5Signal')[0];
+  assert.match(breakout, /Breakout\/retest state is exclusively M5-driven/);
+  assert.match(breakout, /\[m5Snr\.resistance, \.\.\.\(m5Snr\.resistanceLevels/);
+  assert.match(breakout, /\[m5Snr\.support, \.\.\.\(m5Snr\.supportLevels/);
+  assert.doesNotMatch(breakout, /h4Snr/);
+});
