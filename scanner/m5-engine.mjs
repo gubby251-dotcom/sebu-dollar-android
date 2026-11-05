@@ -26,9 +26,11 @@ export function normalizeCandles(rows) {
 
 export function closedCandles(candles, timeframeMs, now = Date.now()) {
   if (!Number.isFinite(timeframeMs) || timeframeMs <= 0) throw new TypeError('timeframeMs must be positive');
+  // BiQuote candle timestamps are authoritative. Do not require Unix-epoch
+  // alignment: broker/session H4 boundaries may be offset from UTC multiples.
+  // A candle is closed when its own open time + timeframe has elapsed.
   return normalizeCandles(candles).filter(c =>
     c.isOpen !== true &&
-    c.time % timeframeMs === 0 &&
     c.time + timeframeMs <= now
   );
 }
@@ -62,8 +64,8 @@ export function detectM5Snr(m5Candles, currentPrice, leftRight = 2) {
   }
   // A confirmed BODY close through a swing permanently invalidates that old
   // M5 level. Wick-only penetrations do not invalidate it.
-  const activeHighs = highs.filter(level => !candles.some(c => c.time > level.time && c.open <= level.price && c.close > level.price));
-  const activeLows = lows.filter(level => !candles.some(c => c.time > level.time && c.open >= level.price && c.close < level.price));
+  const activeHighs = highs.filter(level => !candles.some(c => c.time > level.time && c.close > level.price));
+  const activeLows = lows.filter(level => !candles.some(c => c.time > level.time && c.close < level.price));
   const resistances = activeHighs.filter(x => x.price > price).sort((a,b) => a.price-b.price);
   const supports = activeLows.filter(x => x.price < price).sort((a,b) => b.price-a.price);
   return {
@@ -98,8 +100,8 @@ export function resolveLockedM5Snr(m5Candles, currentPrice, detected, previousSt
   const isBrokenAfter = (level, side) => candles.some(c =>
     c.time > level.time &&
     (side === 'support'
-      ? c.open >= level.price && c.close < level.price
-      : c.open <= level.price && c.close > level.price)
+      ? c.close < level.price
+      : c.close > level.price)
   );
 
   function resolveSide(side) {
