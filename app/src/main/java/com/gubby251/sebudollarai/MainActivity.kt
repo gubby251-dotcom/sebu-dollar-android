@@ -88,6 +88,13 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
+        @JvmStatic
+        fun receiveNativeSignalStatusUpdate(
+            data: Map<String, String>
+        ) {
+            activeInstance?.get()?.receiveStatusUpdateOnUi(data)
+        }
+
 
         /*
          * Simpan signal kalau Activity belum hidup.
@@ -918,18 +925,12 @@ class MainActivity : AppCompatActivity() {
                         putValue("setupName", "setupName")
 
                         val timeframe = row.optString("timeframe", "").uppercase()
-                        if (!row.has("timeframeMinutes")) {
-                            val minutes = when (timeframe) {
-                                "M5" -> 5
-                                "M15" -> 15
-                                "M30" -> 30
-                                else -> 0
-                            }
-                            if (minutes > 0) row.put("timeframeMinutes", minutes)
-                        }
+                        if (timeframe != "M5") continue
+                        if (!row.has("timeframeMinutes")) row.put("timeframeMinutes", 5)
+                        if (row.optInt("timeframeMinutes", 0) != 5) continue
 
-                        if (row.has("type") && row.has("timeframe") &&
-                            row.has("entry") && row.has("sl") && row.has("tp") &&
+                        if (row.has("type") && row.has("entry") &&
+                            row.has("sl") && row.has("tp") &&
                             row.has("candleTime")) {
                             rows.put(row)
                         }
@@ -951,6 +952,30 @@ class MainActivity : AppCompatActivity() {
             .addOnFailureListener { error ->
                 android.util.Log.e("SEBU_HISTORY", "Gagal membaca sent_signals untuk ${currentUser.uid}", error)
             }
+    }
+
+    private fun receiveStatusUpdateOnUi(data: Map<String, String>) {
+        runOnUiThread {
+            try {
+                if (!::webView.isInitialized) return@runOnUiThread
+                val json = JSONObject()
+                for ((key, value) in data) json.put(key, value)
+                val jsArgument = JSONObject.quote(json.toString())
+                webView.evaluateJavascript(
+                    """
+                    (function() {
+                      if (typeof window.receiveNativeSignalStatusUpdate !== 'function') {
+                        return 'NOT_READY';
+                      }
+                      return window.receiveNativeSignalStatusUpdate($jsArgument);
+                    })();
+                    """.trimIndent(),
+                    null
+                )
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
     }
 
     private fun receiveSignalOnUi(
@@ -986,7 +1011,9 @@ class MainActivity : AppCompatActivity() {
                         return 'NOT_READY';
                       }
                       const accepted = window.receiveNativeSignal($jsArgument);
-                      return accepted === true ? 'DELIVERED' : 'NOT_ACCEPTED';
+                      return (accepted === 'ACCEPTED' || accepted === true)
+                        ? 'DELIVERED'
+                        : 'NOT_ACCEPTED';
                     })();
                     """.trimIndent()
                 ) { result ->
