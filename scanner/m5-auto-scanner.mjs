@@ -1,7 +1,7 @@
 import { initializeApp, cert, getApps } from 'firebase-admin/app';
 import { getFirestore } from 'firebase-admin/firestore';
 import { getMessaging } from 'firebase-admin/messaging';
-import { closedCandles, detectH4Snr, detectM5Snr, evaluateM5Rejection, normalizeCandles } from './m5-engine.mjs';
+import { closedCandles, detectH4Snr, detectM5Snr, evaluateM5Signal, normalizeCandles } from './m5-engine.mjs';
 
 const API = process.env.CANDLE_API_URL || 'https://biquote.io/api/XAUUSD/ohlc';
 const TOPIC = process.env.FCM_TOPIC || 'sebu_signal_users';
@@ -65,7 +65,7 @@ async function main() {
     console.log(`No new closed M5 candle. last=${last.time} checkpoint=${previous}`);
     return;
   }
-  const signal = m5Snr ? evaluateM5Rejection(m5, { h4Snr, m5Snr }) : null;
+  const signal = m5Snr ? evaluateM5Signal(m5, { h4Snr, m5Snr }) : null;
   if (signal && signal.candleTime === last.time) {
     const id = `M5_${signal.candleTime}_${signal.type}`;
     const ref = db.collection('sent_signals').doc(id);
@@ -78,7 +78,7 @@ async function main() {
     if (claimed) {
       try {
         const title = `SEBU DOLLAR AI — ${signal.type} XAUUSD M5`;
-        const body = `${signal.type} XAUUSD M5 | Entry ${price(signal.entry)} | SL ${price(signal.sl)} | TP ${price(signal.tp)} | SNR rejection`;
+        const body = `${signal.type} XAUUSD M5 | Entry ${price(signal.entry)} | SL ${price(signal.sl)} | TP ${price(signal.tp)} | ${signal.pattern === 'M5_SNR_BREAKOUT_RETEST' ? 'SNR breakout & retest' : 'SNR rejection'}`;
         const messageId = await getMessaging().send({ topic: TOPIC, data: {
           event: 'NEW_SIGNAL', title, body, type: signal.type, symbol: 'XAUUSD', timeframe: 'M5', timeframeMinutes: '5',
           entry: price(signal.entry), sl: price(signal.sl), tp: price(signal.tp), candleTime: String(signal.candleTime),
