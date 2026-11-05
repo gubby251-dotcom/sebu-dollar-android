@@ -892,12 +892,21 @@ class MainActivity : AppCompatActivity() {
                     return@addSnapshotListener
                 }
                 val payload = JSONObject()
+                payload.put("symbol", doc.getString("symbol") ?: "XAUUSD")
                 payload.put("timeframe", doc.getString("timeframe") ?: "M5")
                 for (key in listOf("h4Resistance", "h4Support", "m5Resistance", "m5Support")) {
-                    val value = doc.get(key)
-                    if (value is Number) payload.put(key, value) else payload.put(key, JSONObject.NULL)
+                    val raw = doc.get(key)
+                    val number = when (raw) {
+                        is Number -> raw.toDouble()
+                        is String -> raw.trim().replace(",", ".").toDoubleOrNull()
+                        else -> null
+                    }
+                    if (number != null && number.isFinite()) payload.put(key, number)
+                    else payload.put(key, JSONObject.NULL)
                 }
+                payload.put("updatedAt", doc.getString("updatedAt") ?: "")
                 latestSnrPayload = payload.toString()
+                android.util.Log.d("SEBU_SNR", "Snapshot SNR diterima: $latestSnrPayload")
                 deliverMarketSnrToWebView(latestSnrPayload!!, 0)
             }
     }
@@ -909,12 +918,13 @@ class MainActivity : AppCompatActivity() {
             "(function(){if(typeof window.updateMarketSnr!=='function')return 'NOT_READY';return window.updateMarketSnr($argument);})();"
         ) { result ->
             val value = result?.trim('"') ?: "NO_RESULT"
-            if (value == "NOT_READY" && attempt < 8) {
-                mainHandler.postDelayed({ deliverMarketSnrToWebView(payload, attempt + 1) }, 400L)
-            } else if (value == "UPDATED") {
+            if (value == "UPDATED") {
                 android.util.Log.d("SEBU_SNR", "Empat nilai SNR berhasil dikirim ke WebView")
+            } else if (attempt < 30 && !isFinishing && !isDestroyed) {
+                android.util.Log.w("SEBU_SNR", "Pengiriman SNR belum berhasil ($value), percobaan ${attempt + 1}/30")
+                mainHandler.postDelayed({ deliverMarketSnrToWebView(payload, attempt + 1) }, 1000L)
             } else {
-                android.util.Log.w("SEBU_SNR", "Hasil pengiriman SNR ke WebView: $value")
+                android.util.Log.e("SEBU_SNR", "Gagal mengirim SNR setelah 30 percobaan: $value")
             }
         }
     }
@@ -1240,10 +1250,11 @@ class MainActivity : AppCompatActivity() {
             webView.postDelayed({
                 if (::webView.isInitialized && !isFinishing) {
                     webView.evaluateJavascript(
-                        "if(typeof updateChart==='function') updateChart();",
+                        "if(window.ensureTradingViewChart) window.ensureTradingViewChart(false);",
                         null
                     )
                     latestSnrPayload?.let { deliverMarketSnrToWebView(it, 0) }
+                    if (auth.currentUser != null) syncMarketSnrFromFirestore()
                 }
             }, 250L)
         }
