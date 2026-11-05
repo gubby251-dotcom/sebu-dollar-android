@@ -26,6 +26,7 @@ import androidx.core.content.ContextCompat
 
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.firestore.ListenerRegistration
 import com.google.firebase.firestore.Source
 import com.google.firebase.messaging.FirebaseMessaging
 
@@ -40,6 +41,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var webView: WebView
     private lateinit var auth: FirebaseAuth
     private lateinit var firestore: FirebaseFirestore
+    private var snrListener: ListenerRegistration? = null
 
     private val ADMIN_UID =
         "ilhY96UDI3W9n4Qir4v78nu8G9X2"
@@ -782,8 +784,9 @@ class MainActivity : AppCompatActivity() {
                      */
                     flushPendingSignals()
 
-                    // Sinkronkan riwayat signal dari Firestore setelah halaman siap.
+                    // Sinkronkan riwayat dan SNR M5/H4 setelah halaman siap.
                     syncSignalHistoryFromFirestore()
+                    syncMarketSnrFromFirestore()
 
                     /*
                      * Kalau Activity dibuka melalui
@@ -864,6 +867,36 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+
+
+    private fun syncMarketSnrFromFirestore() {
+        snrListener?.remove()
+        snrListener = FirebaseFirestore.getInstance()
+            .collection("market_analysis")
+            .document("xauusd_snr")
+            .addSnapshotListener { doc, error ->
+                if (error != null) {
+                    android.util.Log.e("SEBU_SNR", "Gagal memantau SNR H4/M5", error)
+                    return@addSnapshotListener
+                }
+                if (doc == null || !doc.exists()) return@addSnapshotListener
+                val payload = JSONObject()
+                payload.put("timeframe", doc.getString("timeframe") ?: "")
+                for (key in listOf("h4Resistance", "h4Support", "m5Resistance", "m5Support")) {
+                    val value = doc.get(key)
+                    if (value is Number) payload.put(key, value)
+                }
+                val argument = JSONObject.quote(payload.toString())
+                runOnUiThread {
+                    if (::webView.isInitialized) {
+                        webView.evaluateJavascript(
+                            "if(window.updateMarketSnr) window.updateMarketSnr($argument);",
+                            null
+                        )
+                    }
+                }
+            }
+    }
 
     /*
      * Dipanggil saat signal masuk ketika
@@ -1178,6 +1211,9 @@ class MainActivity : AppCompatActivity() {
 
 
     override fun onDestroy() {
+
+        snrListener?.remove()
+        snrListener = null
 
         if (
             activeInstance?.get() === this
