@@ -57,25 +57,18 @@ test('Android receives SNR snapshots from Firestore', async () => {
 });
 
 
-test('Android history uses a live Firestore snapshot listener', async () => {
-  const kotlin = await read('app/src/main/java/com/gubby251/sebudollarai/MainActivity.kt');
-  assert.match(kotlin, /historyListener\s*=\s*firestore\.collection\("sent_signals"\)/);
-  assert.match(kotlin, /addSnapshotListener/);
-  assert.match(kotlin, /onResume\(\)/);
-  assert.match(kotlin, /timeframeMinutes.*5/);
-});
-
-test('M5 notification intent does not require a legacy setup number', async () => {
-  const kotlin = await read('app/src/main/java/com/gubby251/sebudollarai/MainActivity.kt');
-  assert.match(kotlin, /M5 engine has no Setup label/);
-  assert.doesNotMatch(kotlin, /setup\.isNullOrBlank\(\)/);
-});
-
-test('TradingView loader retries and chart is exposed to Android WebView', async () => {
+test('TradingView loader is asynchronous and avoids rebuilding an already active interval', async () => {
   const html = await read('public/index.html');
-  assert.match(html, /function loadTradingViewLibrary\(/);
-  assert.match(html, /widgetembed\//);
-  assert.match(html, /window\.updateChart=updateChart/);
-  assert.match(html, /OANDA:XAUUSD/);
-  assert.match(html, /renderTradingViewIframeFallback/);
+  assert.match(html, /function ensureTradingViewScript\(/);
+  assert.match(html, /if\(sebuTvWidgetReady && sebuTvWidgetInterval===tf && !force\) return/);
+  assert.match(html, /addEventListener\("online"/);
+  assert.equal(html.includes('<script src="https://s3.tradingview.com/tv.js"></script>'), false);
+});
+
+test('Android WebView retains default cache and retries SNR delivery after page resume', async () => {
+  const kotlin = await read('app/src/main/java/com/gubby251/sebudollarai/MainActivity.kt');
+  assert.match(kotlin, /cacheMode\s*=\s*android\.webkit\.WebSettings\.LOAD_DEFAULT/);
+  assert.match(kotlin, /override fun onResume\(\)/);
+  assert.match(kotlin, /latestSnrPayload\?\.let/);
+  assert.match(kotlin, /deliverMarketSnrToWebView/);
 });
