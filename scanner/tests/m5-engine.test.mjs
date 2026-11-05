@@ -76,3 +76,35 @@ test('M5 wick-only penetration does not invalidate a resistance level', () => {
   const levels = detectM5Snr(rows, 108, 2);
   assert.equal(levels.resistance, 110);
 });
+
+
+test('H4 SNR uses exactly the latest single fully closed candle wick pair', () => {
+  const h4Start = Date.UTC(2026, 10, 5, 0, 0, 0);
+  const rows = [
+    { openTime: h4Start, open: 4065.527, high: 4147.028, low: 4061.479, close: 4140.587, isOpen: false },
+    { openTime: h4Start + TF_MS.H4, open: 4140.665, high: 4145.416, low: 4108.993, close: 4122.070, isOpen: true }
+  ];
+  const closed = closedCandles(rows, TF_MS.H4, h4Start + TF_MS.H4 + 60_000);
+  assert.equal(closed.length, 1);
+  const levels = detectH4Snr(closed);
+  assert.equal(levels.resistance, 4147.028);
+  assert.equal(levels.support, 4061.479);
+  assert.equal(levels.candleTime, h4Start);
+  assert.equal(levels.candleCloseTime, h4Start + TF_MS.H4);
+});
+
+test('H4 SNR rolls to the new candle only after its four-hour close', () => {
+  const h4Start = Date.UTC(2026, 10, 5, 0, 0, 0);
+  const rows = [
+    { openTime: h4Start, open: 4065, high: 4147, low: 4061, close: 4140, isOpen: false },
+    { openTime: h4Start + TF_MS.H4, open: 4140, high: 4155, low: 4108, close: 4148, isOpen: false }
+  ];
+  const beforeClose = closedCandles(rows, TF_MS.H4, h4Start + 2 * TF_MS.H4 - 1);
+  assert.equal(beforeClose.length, 1);
+  const afterClose = closedCandles(rows, TF_MS.H4, h4Start + 2 * TF_MS.H4);
+  assert.equal(afterClose.length, 2);
+  const levels = detectH4Snr(afterClose);
+  assert.equal(levels.resistance, 4155);
+  assert.equal(levels.support, 4108);
+  assert.equal(levels.candleTime, h4Start + TF_MS.H4);
+});
