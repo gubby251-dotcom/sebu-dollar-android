@@ -79,3 +79,10 @@ test('status monitor must not execute legacy M30/M15 signals', () => {
     /timeframe:\s*['"]M30['"]|timeframe:\s*['"]M15['"]/
   );
 });
+
+
+test('scanner uses all closed M5 candles to retire body-broken levels', () => {
+  assert.match(scanner, /detectM5Snr\(m5, last\.close, 2\)/);
+  assert.match(scanner, /m5BrokenResistanceLevels/);
+  assert.match(scanner, /m5BrokenSupportLevels/);
+});
