@@ -48,16 +48,32 @@ export function detectM5Snr(m5Candles, currentPrice, leftRight = 2) {
     if (before.every(x => p.high > x.high) && after.every(x => p.high >= x.high)) highs.push({ price: p.high, time: p.time });
     if (before.every(x => p.low < x.low) && after.every(x => p.low <= x.low)) lows.push({ price: p.low, time: p.time });
   }
-  const resistances = highs.filter(x => x.price > price).sort((a,b) => a.price-b.price);
-  const supports = lows.filter(x => x.price < price).sort((a,b) => b.price-a.price);
+  // A confirmed M5 body breakout permanently retires the old swing level.
+  // Wick-only probes do not retire a level: the candle body must cross it
+  // and close on the far side. This prevents a broken resistance/support
+  // from reappearing as the nearest level after a later pullback.
+  const brokenResistance = highs.filter(level => candles.some(c =>
+    c.time > level.time && c.open <= level.price && c.close > level.price
+  ));
+  const brokenSupport = lows.filter(level => candles.some(c =>
+    c.time > level.time && c.open >= level.price && c.close < level.price
+  ));
+  const brokenResistanceTimes = new Set(brokenResistance.map(x => `${x.price}:${x.time}`));
+  const brokenSupportTimes = new Set(brokenSupport.map(x => `${x.price}:${x.time}`));
+  const activeHighs = highs.filter(x => !brokenResistanceTimes.has(`${x.price}:${x.time}`));
+  const activeLows = lows.filter(x => !brokenSupportTimes.has(`${x.price}:${x.time}`));
+  const resistances = activeHighs.filter(x => x.price > price).sort((a,b) => a.price-b.price);
+  const supports = activeLows.filter(x => x.price < price).sort((a,b) => b.price-a.price);
   return {
     resistance: resistances[0]?.price ?? null,
     resistanceTime: resistances[0]?.time ?? null,
     support: supports[0]?.price ?? null,
     supportTime: supports[0]?.time ?? null,
-    resistanceLevels: highs.map(x => x.price).sort((a,b) => a-b),
-    supportLevels: lows.map(x => x.price).sort((a,b) => b-a),
-    source: 'M5_CONFIRMED_SWING_2x2'
+    resistanceLevels: activeHighs.map(x => x.price).sort((a,b) => a-b),
+    supportLevels: activeLows.map(x => x.price).sort((a,b) => b-a),
+    brokenResistanceLevels: brokenResistance.map(x => ({ price: x.price, time: x.time })),
+    brokenSupportLevels: brokenSupport.map(x => ({ price: x.price, time: x.time })),
+    source: 'M5_CONFIRMED_SWING_2x2_BODY_CLOSE'
   };
 }
 
@@ -103,13 +119,15 @@ export function evaluateM5Rejection(m5Candles, { h4Snr, m5Snr } = {}) {
  * candle must retest and hold it, then C1/C2 confirm in the breakout direction.
  * C1 is the first directional candle after retest; C2 must close beyond C1 wick.
  */
-export function evaluateM5BreakoutRetest(m5Candles, { h4Snr, m5Snr } = {}) {
+export function evaluateM5BreakoutRetest(m5Candles, { m5Snr } = {}) {
   const c = normalizeCandles(m5Candles);
-  if (c.length < 5 || !h4Snr || !m5Snr) return null;
+  if (c.length < 5 || !m5Snr) return null;
   const c2 = c.at(-1), c1 = c.at(-2), retest = c.at(-3);
   const history = c.slice(0, -3);
-  const resistanceLevels = [...new Set([h4Snr.resistance, m5Snr.resistance, ...(m5Snr.resistanceLevels || [])].map(Number).filter(Number.isFinite))];
-  const supportLevels = [...new Set([h4Snr.support, m5Snr.support, ...(m5Snr.supportLevels || [])].map(Number).filter(Number.isFinite))];
+  // Breakout/retest state is exclusively M5-driven. H4 remains a displayed
+  // higher-timeframe reference, but an H4 candle/body break is never required.
+  const resistanceLevels = [...new Set([m5Snr.resistance, ...(m5Snr.resistanceLevels || [])].map(Number).filter(Number.isFinite))];
+  const supportLevels = [...new Set([m5Snr.support, ...(m5Snr.supportLevels || [])].map(Number).filter(Number.isFinite))];
 
   // BUY only follows a confirmed resistance break, hold above, retest, then C1/C2 confirmation.
   if (bullish(c1) && bullish(c2) && c2.close > c1.high) {
